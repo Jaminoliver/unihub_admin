@@ -1,43 +1,33 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useActionState, useEffect } from 'react';
+import { useFormStatus } from 'react-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { createClient } from '@/lib/supabase/client';
+import { adminLogin } from '@/app/admin/login/actions';
 import { toast } from 'sonner';
 
+const initialState = { error: '' };
+
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" className="w-full" disabled={pending}>
+      {pending ? 'Signing in...' : 'Sign In'}
+    </Button>
+  );
+}
+
 export function AdminLoginForm() {
-  const router = useRouter();
-  const [loading, setLoading] = useState(false);
+  const [state, formAction] = useActionState(adminLogin, initialState);
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setLoading(true);
-
-    const formData = new FormData(e.currentTarget);
-    const email = formData.get('email') as string;
-    const password = formData.get('password') as string;
-
-    const supabase = createClient();
-    
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      toast.error(error.message);
-      setLoading(false);
-      return;
+  useEffect(() => {
+    if (state?.error) {
+      toast.error(state.error);
     }
-
-    toast.success('Login successful');
-    router.push('/admin/dashboard');
-    router.refresh();
-  };
+  }, [state]);
 
   return (
     <Card className="w-full max-w-md">
@@ -51,7 +41,7 @@ export function AdminLoginForm() {
         <CardDescription>Sign in to access the admin panel</CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form action={formAction} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
             <Input
@@ -72,9 +62,7 @@ export function AdminLoginForm() {
               required
             />
           </div>
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? 'Signing in...' : 'Sign In'}
-          </Button>
+          <SubmitButton />
         </form>
       </CardContent>
     </Card>

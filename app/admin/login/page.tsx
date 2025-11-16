@@ -1,12 +1,11 @@
-import { redirect } from 'next/navigation';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { getAdminSession } from './actions';
 import { AdminLoginForm } from '@/components/admin/AdminLoginForm';
+import { redirect } from 'next/navigation';
 
 export default async function AdminLoginPage() {
-  const supabase = await createServerSupabaseClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const session = await getAdminSession();
 
-  if (user) {
+  if (session) {
     redirect('/admin/dashboard');
   }
 

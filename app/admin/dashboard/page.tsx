@@ -1,74 +1,115 @@
 import { redirect } from 'next/navigation';
+import { getAdminSession } from '../login/actions';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
-import { WithdrawalProcessor } from '@/components/admin/WithdrawalProcessor';
+import { DashboardStats } from '@/components/admin/dashboard/DashboardStats';
+import { RecentActivity } from '@/components/admin/dashboard/RecentActivity';
+import { QuickActions } from '@/components/admin/dashboard/QuickActions';
 
 export default async function AdminDashboardPage() {
+  const session = await getAdminSession();
+  if (!session) redirect('/admin/login');
+
   const supabase = await createServerSupabaseClient();
-  const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user) {
-    redirect('/admin/login');
-  }
+  // Get all orders
+  const { data: orders } = await supabase
+    .from('orders')
+    .select('total_amount, commission_amount, payment_status, created_at, escrow_amount');
 
-  // Get pending withdrawals
-  const { data: withdrawals } = await supabase
-    .from('withdrawal_requests')
-    .select(`
-      *,
-      seller:sellers (
-        full_name,
-        email,
-        wallet_balance
-      )
-    `)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false });
+  // Calculate metrics
+  const completedOrders = orders?.filter(o => o.payment_status === 'completed') || [];
+  const totalRevenue = completedOrders.reduce((sum, o) => sum + parseFloat(o.total_amount || 0), 0);
+  const totalCommission = totalRevenue * 0.05; // 5% commission
+  const totalEscrow = completedOrders.reduce((sum, o) => sum + parseFloat(o.escrow_amount || 0), 0);
 
-  // Get stats
-  const { count: pendingCount } = await supabase
+  // Get user counts
+  const { count: totalBuyers } = await supabase
+    .from('profiles')
+    .select('*', { count: 'exact', head: true })
+    .eq('is_seller', false);
+
+  const { count: totalSellers } = await supabase
+    .from('sellers')
+    .select('*', { count: 'exact', head: true });
+
+  // Get today's signups
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const { count: todayBuyers } = await supabase
+    .from('profiles')
+    .select('*', { count: 'exact', head: true })
+    .eq('is_seller', false)
+    .gte('created_at', today.toISOString());
+
+  const { count: todaySellers } = await supabase
+    .from('sellers')
+    .select('*', { count: 'exact', head: true })
+    .gte('created_at', today.toISOString());
+
+  // Get pending items
+  const { count: pendingProducts } = await supabase
+    .from('products')
+    .select('*', { count: 'exact', head: true })
+    .eq('status', 'pending');
+
+  const { count: pendingWithdrawals } = await supabase
     .from('withdrawal_requests')
     .select('*', { count: 'exact', head: true })
     .eq('status', 'pending');
 
-  const { count: completedCount } = await supabase
-    .from('withdrawal_requests')
-    .select('*', { count: 'exact', head: true })
-    .eq('status', 'completed');
+  // Get recent orders
+  const { data: recentOrders } = await supabase
+    .from('orders')
+    .select(`
+      *,
+      buyer:profiles!orders_buyer_id_fkey(full_name, email),
+      seller:sellers(business_name),
+      product:products(name)
+    `)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  // Get recent users
+  const { data: recentUsers } = await supabase
+    .from('profiles')
+    .select('full_name, email, created_at, is_seller')
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  const stats = {
+    totalRevenue,
+    totalCommission,
+    gmv: totalRevenue,
+    escrow: totalEscrow,
+    totalBuyers: totalBuyers || 0,
+    totalSellers: totalSellers || 0,
+    todayBuyers: todayBuyers || 0,
+    todaySellers: todaySellers || 0,
+    pendingProducts: pendingProducts || 0,
+    pendingWithdrawals: pendingWithdrawals || 0,
+  };
 
   return (
     <div className="min-h-screen bg-gray-100">
       <div className="max-w-7xl mx-auto p-6 space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
-            <p className="text-gray-500 mt-1">Manage withdrawal requests</p>
-          </div>
-          <form action="/api/auth/signout" method="post">
-            <button className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300">
-              Sign Out
-            </button>
-          </form>
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
+          <p className="text-gray-500 mt-1">Welcome back, {session.full_name}</p>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white p-6 rounded-lg shadow">
-            <p className="text-gray-500 text-sm">Pending Withdrawals</p>
-            <p className="text-3xl font-bold text-yellow-600">{pendingCount || 0}</p>
-          </div>
-          <div className="bg-white p-6 rounded-lg shadow">
-            <p className="text-gray-500 text-sm">Completed Today</p>
-            <p className="text-3xl font-bold text-green-600">{completedCount || 0}</p>
-          </div>
-          <div className="bg-white p-6 rounded-lg shadow">
-            <p className="text-gray-500 text-sm">Total Processed</p>
-            <p className="text-3xl font-bold text-blue-600">{completedCount || 0}</p>
-          </div>
-        </div>
+        {/* Stats Grid */}
+        <DashboardStats stats={stats} />
 
-        {/* Withdrawal Processor */}
-        <WithdrawalProcessor withdrawals={withdrawals || []} />
+        {/* Quick Actions */}
+        <QuickActions stats={stats} />
+
+        {/* Recent Activity */}
+        <RecentActivity 
+          recentOrders={recentOrders || []} 
+          recentUsers={recentUsers || []} 
+        />
       </div>
     </div>
   );
