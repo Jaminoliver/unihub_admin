@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getAdminSession } from '../login/actions';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { createAdminSupabaseClient } from '@/lib/supabase/admin';
 import { DashboardStats } from '@/components/admin/dashboard/DashboardStats';
 import { RecentActivity } from '@/components/admin/dashboard/RecentActivity';
 import { QuickActions } from '@/components/admin/dashboard/QuickActions';
@@ -9,18 +9,37 @@ export default async function AdminDashboardPage() {
   const session = await getAdminSession();
   if (!session) redirect('/admin/login');
 
-  const supabase = await createServerSupabaseClient();
+  // Use admin client with service role key - bypasses RLS
+  const supabase = createAdminSupabaseClient();
 
-  // Get all orders
+  // Get all orders with delivered status
   const { data: orders } = await supabase
     .from('orders')
-    .select('total_amount, commission_amount, payment_status, created_at, escrow_amount');
+    .select('total_amount, commission_amount, order_status, payment_status, created_at, escrow_amount')
+    .eq('order_status', 'delivered');
 
-  // Calculate metrics
-  const completedOrders = orders?.filter(o => o.payment_status === 'completed') || [];
-  const totalRevenue = completedOrders.reduce((sum, o) => sum + parseFloat(o.total_amount || 0), 0);
-  const totalCommission = totalRevenue * 0.05; // 5% commission
-  const totalEscrow = completedOrders.reduce((sum, o) => sum + parseFloat(o.escrow_amount || 0), 0);
+  // Calculate metrics from delivered orders only
+  const totalRevenue = (orders || []).reduce((sum, o) => sum + parseFloat(o.total_amount || '0'), 0);
+  const totalCommission = (orders || []).reduce((sum, o) => sum + parseFloat(o.commission_amount || '0'), 0);
+  const totalEscrow = (orders || []).reduce((sum, o) => sum + parseFloat(o.escrow_amount || '0'), 0);
+
+  // Get actual payouts from withdrawal_requests (CORRECT SOURCE)
+  const { data: completedWithdrawals } = await supabase
+    .from('withdrawal_requests')
+    .select('amount')
+    .eq('status', 'completed');
+
+  const totalSellerPayouts = (completedWithdrawals || []).reduce((sum, w) => sum + parseFloat(w.amount || '0'), 0);
+
+  // Get all orders count (including pending, processing, etc.)
+  const { count: totalOrders } = await supabase
+    .from('orders')
+    .select('*', { count: 'exact', head: true });
+
+  const { count: pendingOrders } = await supabase
+    .from('orders')
+    .select('*', { count: 'exact', head: true })
+    .eq('order_status', 'pending');
 
   // Get user counts
   const { count: totalBuyers } = await supabase
@@ -58,7 +77,14 @@ export default async function AdminDashboardPage() {
     .select('*', { count: 'exact', head: true })
     .eq('status', 'pending');
 
-  // Get recent orders
+  // Get total wallet balances across all sellers
+  const { data: walletData } = await supabase
+    .from('sellers')
+    .select('wallet_balance');
+
+  const totalWalletBalance = (walletData || []).reduce((sum, s) => sum + parseFloat(s.wallet_balance || '0'), 0);
+
+  // Get recent orders from ALL sellers
   const { data: recentOrders } = await supabase
     .from('orders')
     .select(`
@@ -68,20 +94,25 @@ export default async function AdminDashboardPage() {
       product:products(name)
     `)
     .order('created_at', { ascending: false })
-    .limit(5);
+    .limit(10);
 
-  // Get recent users
+  // Get recent users (both buyers and sellers)
   const { data: recentUsers } = await supabase
     .from('profiles')
     .select('full_name, email, created_at, is_seller')
     .order('created_at', { ascending: false })
-    .limit(5);
+    .limit(10);
 
   const stats = {
     totalRevenue,
     totalCommission,
     gmv: totalRevenue,
     escrow: totalEscrow,
+    totalSellerPayouts,
+    totalWalletBalance,
+    totalOrders: totalOrders || 0,
+    pendingOrders: pendingOrders || 0,
+    deliveredOrders: orders?.length || 0,
     totalBuyers: totalBuyers || 0,
     totalSellers: totalSellers || 0,
     todayBuyers: todayBuyers || 0,
