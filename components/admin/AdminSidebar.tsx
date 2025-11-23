@@ -17,11 +17,10 @@ import {
 const navigation = [
   { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutDashboard },
   { name: 'Users', href: '/admin/users', icon: Users },
-  { name: 'Products', href: '/admin/products', icon: Package },
+  { name: 'Products', href: '/admin/dashboard/products', icon: Package },
   { name: 'Orders', href: '/admin/orders', icon: ShoppingCart },
   { name: 'Disputes', href: '/admin/disputes', icon: AlertCircle },
-  { name: 'Withdrawals', href: '/admin/withdrawals', icon: Wallet },
-  { name: 'Reports', href: '/admin/reports', icon: FileText },
+  { name: 'Withdrawals', href: '/admin/dashboard/withdrawals', icon: Wallet },  { name: 'Reports', href: '/admin/reports', icon: FileText },
   { name: 'Settings', href: '/admin/settings', icon: Settings },
 ];
 

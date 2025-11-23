@@ -3,8 +3,10 @@
 import { useState, useTransition, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Search, CheckCircle2, XCircle, AlertCircle, Eye, Filter } from 'lucide-react';
-import { ProductDetailSheet } from '@/components/admin/products/ProductDetailSheet';
-import { toggleProductSuspension, suspendSellerProducts } from '@/app/admin/products/actions';
+import { ProductDetailPage } from '@/components/admin/products/ProductDetailSheet';
+import { Lock, Ban } from 'lucide-react';
+import { toggleProductSuspension, banProduct } from '@/app/admin/dashboard/products/actions';
+
 
 type SellerOption = {
   id: string;
@@ -43,6 +45,7 @@ type Product = {
   favorite_count: number;
   average_rating: number;
   review_count: number;
+  wishlist_count: number;
   
   is_available: boolean;
   is_suspended: boolean;
@@ -53,6 +56,11 @@ type Product = {
   admin_suspended: boolean;
   admin_suspension_reason: string | null;
   admin_suspended_at: string | null;
+
+  is_banned: boolean; // ✅ Add this
+  ban_reason: string | null; // ✅ Add this
+  banned_at: string | null; // ✅ Add this
+
 
   created_at: string;
   seller_id: string;
@@ -94,12 +102,6 @@ export function AllProducts({
   // Modal & Sheet State
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
-  
-  // Suspension Logic State
-  const [showSuspendModal, setShowSuspendModal] = useState(false);
-  const [suspendReason, setSuspendReason] = useState('');
-  const [targetSuspendId, setTargetSuspendId] = useState<string | null>(null);
-  const [suspendType, setSuspendType] = useState<'single' | 'bulk_seller'>('single');
 
   // Safeguard: Ensure products is always an array
   const products = Array.isArray(data?.products) ? data.products : [];
@@ -143,56 +145,9 @@ export function AllProducts({
   };
 
   const openProductDetails = (product: Product) => {
+    console.log('Opening product details:', product?.name, product?.id);
     setSelectedProduct(product);
     setIsSheetOpen(true);
-  };
-
-  // --- Suspension Handlers ---
-
-  const initiateSuspension = (productId: string) => {
-    setTargetSuspendId(productId);
-    setSuspendType('single');
-    
-    const product = products.find(p => p.id === productId);
-    if (product?.admin_suspended) {
-        handleToggleSuspension(productId, false);
-    } else {
-        setSuspendReason('');
-        setShowSuspendModal(true);
-    }
-  };
-
-  const initiateSellerSuspension = (sellerId: string) => {
-    setTargetSuspendId(sellerId);
-    setSuspendType('bulk_seller');
-    setSuspendReason('');
-    setShowSuspendModal(true);
-  };
-
-  const confirmSuspension = async () => {
-    if (!targetSuspendId || !suspendReason.trim()) return;
-
-    startTransition(async () => {
-      if (suspendType === 'single') {
-        await handleToggleSuspension(targetSuspendId, true, suspendReason);
-      } else {
-        await suspendSellerProducts(targetSuspendId, suspendReason);
-      }
-      
-      setShowSuspendModal(false);
-      setSuspendReason('');
-      if (isSheetOpen) setIsSheetOpen(false);
-      router.refresh();
-    });
-  };
-
-  const handleToggleSuspension = async (id: string, isSuspended: boolean, reason?: string) => {
-     const result = await toggleProductSuspension(id, isSuspended, reason);
-     if (!result.success) {
-       alert('Failed to update suspension status');
-     } else {
-       router.refresh();
-     }
   };
 
   // --- Helpers ---
@@ -214,41 +169,55 @@ export function AllProducts({
     }
   };
 
-  const getStatusBadge = (product: Product) => {
-    if (product.admin_suspended) {
-        return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 border border-red-200">
-            <AlertCircle className="h-3 w-3" />
-            Admin Suspended
-          </span>
-        );
-    }
-
-    if (product.is_suspended) {
-      return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-          <AlertCircle className="h-3 w-3" />
-          Seller Paused
-        </span>
-      );
-    }
-
-    if (!product.is_available) {
-      return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-          <XCircle className="h-3 w-3" />
-          Out of Stock
-        </span>
-      );
-    }
-
+ const getStatusBadge = (product: Product) => {
+  // Check banned first
+  if (product.is_banned) {
     return (
-      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-        <CheckCircle2 className="h-3 w-3" />
-        Active
+      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 border border-red-200">
+        <Ban className="h-3 w-3" />
+        Banned
       </span>
     );
-  };
+  }
+
+  // Check admin suspension
+  if (product.admin_suspended) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 border border-red-200">
+        <AlertCircle className="h-3 w-3" />
+        Admin Suspended
+      </span>
+    );
+  }
+
+  // Check seller suspension
+  if (product.is_suspended) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+        <AlertCircle className="h-3 w-3" />
+        Seller Paused
+      </span>
+    );
+  }
+
+  // Check actual stock quantity instead of is_available flag
+  if (product.stock_quantity <= 0) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+        <XCircle className="h-3 w-3" />
+        Out of Stock
+      </span>
+    );
+  }
+
+  // Product is active
+  return (
+    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+      <CheckCircle2 className="h-3 w-3" />
+      Active
+    </span>
+  );
+};
 
   const stats = [
     {
@@ -331,146 +300,138 @@ export function AllProducts({
       </div>
 
       {/* Products Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Product</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Seller</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Price</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Stats</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Status</th>
-                <th className="px-6 py-3 text-right text-xs font-semibold text-gray-600 uppercase">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {products.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
-                    No products found matching your filters
-                  </td>
-                </tr>
-              ) : (
-                products.map((product) => (
-                  <tr 
-                    key={product.id} 
-                    className="hover:bg-gray-50 cursor-pointer transition-colors"
-                    onClick={() => openProductDetails(product)}
+<div className="bg-white rounded-lg shadow overflow-hidden">
+  <div className="overflow-x-auto">
+    <table className="w-full">
+      <thead className="bg-gray-50 border-b border-gray-200">
+        <tr>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Product</th>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Seller</th>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Price</th>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Stats</th>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Status</th>
+          <th className="px-6 py-3 text-right text-xs font-semibold text-gray-600 uppercase">Actions</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-gray-200">
+        {products.length === 0 ? (
+          <tr>
+            <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
+              No products found matching your filters
+            </td>
+          </tr>
+        ) : (
+          products.map((product) => (
+            <tr 
+              key={product.id} 
+              className="hover:bg-gray-50 cursor-pointer transition-colors"
+              onClick={() => openProductDetails(product)}
+            >
+              <td className="px-6 py-4">
+                <div className="flex items-center gap-3">
+                  {getFirstImage(product.image_urls) ? (
+                    <img
+                      src={getFirstImage(product.image_urls)!}
+                      alt={product.name}
+                      className="h-10 w-10 rounded object-cover border"
+                    />
+                  ) : (
+                    <div className="h-10 w-10 bg-gray-200 rounded flex items-center justify-center border">
+                      <span className="text-xs text-gray-400">Img</span>
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate max-w-[200px]">
+                      {product.name}
+                    </p>
+                    <p className="text-xs text-gray-500 capitalize">
+                      {product.condition} • {product.brand || 'Generic'}
+                    </p>
+                  </div>
+                </div>
+              </td>
+              <td className="px-6 py-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-900">
+                    {product.sellers?.business_name || product.sellers?.full_name || 'Unknown'}
+                  </p>
+                  <p className="text-xs text-gray-500">{product.sellers?.university?.name || 'N/A'}</p>
+                </div>
+              </td>
+              <td className="px-6 py-4">
+                <span className="text-sm font-medium text-gray-900">
+                  {formatPrice(product.price)}
+                </span>
+              </td>
+              <td className="px-6 py-4">
+  <div className="text-xs text-gray-600 space-y-1">
+    <p>{product.stock_quantity || 0} In Stock</p>
+    <p className="text-gray-400">View details for stats</p>
+  </div>
+</td>
+              <td className="px-6 py-4">{getStatusBadge(product)}</td>
+              <td className="px-6 py-4 text-right">
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); openProductDetails(product); }}
+                    className="p-2 hover:bg-blue-100 rounded-full text-blue-600"
+                    title="View Details"
                   >
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        {getFirstImage(product.image_urls) ? (
-                          <img
-                            src={getFirstImage(product.image_urls)!}
-                            alt={product.name}
-                            className="h-10 w-10 rounded object-cover border"
-                          />
-                        ) : (
-                          <div className="h-10 w-10 bg-gray-200 rounded flex items-center justify-center border">
-                            <span className="text-xs text-gray-400">Img</span>
-                          </div>
-                        )}
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate max-w-[200px]">
-                            {product.name}
-                          </p>
-                          <p className="text-xs text-gray-500 capitalize">
-                            {product.condition} • {product.brand || 'Generic'}
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-gray-900">
-                          {product.sellers?.business_name || product.sellers?.full_name || 'Unknown'}
-                        </p>
-                        <p className="text-xs text-gray-500">{product.sellers?.university?.name || 'N/A'}</p>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="text-sm font-medium text-gray-900">
-                        {formatPrice(product.price)}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-xs text-gray-600 space-y-1">
-                        <p>{product.sold_count || 0} Sold</p>
-                        <p>{product.view_count || 0} Views</p>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">{getStatusBadge(product)}</td>
-                    <td className="px-6 py-4 text-right">
-                       <button
-                         onClick={(e) => {
-                           e.stopPropagation();
-                           openProductDetails(product);
-                         }}
-                         className="p-2 hover:bg-blue-100 rounded-full text-blue-600 transition-colors"
-                         title="View Details"
-                       >
-                         <Eye className="h-4 w-4" />
-                       </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                    <Eye className="h-4 w-4" />
+                  </button>
+                  {!product.admin_suspended && !product.is_banned && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const reason = prompt('Reason for suspension:');
+                        if (reason) {
+                          startTransition(async () => {
+                            await toggleProductSuspension(product.id, true, reason);
+                            router.refresh();
+                          });
+                        }
+                      }}
+                      className="p-2 hover:bg-orange-100 rounded-full text-orange-600"
+                      title="Suspend"
+                    >
+                      <Lock className="h-4 w-4" />
+                    </button>
+                  )}
+                  {!product.is_banned && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const reason = prompt('Reason for permanent ban:');
+                        if (reason) {
+                          startTransition(async () => {
+                            await banProduct(product.id, reason);
+                            router.refresh();
+                          });
+                        }
+                      }}
+                      className="p-2 hover:bg-red-100 rounded-full text-red-600"
+                      title="Ban"
+                    >
+                      <Ban className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              </td>
+            </tr>
+          ))
+        )}
+      </tbody>
+    </table>
+  </div>
+</div>
 
-      {/* Product Detail Sheet */}
-      <ProductDetailSheet
-        product={selectedProduct}
-        isOpen={isSheetOpen}
-        onClose={() => setIsSheetOpen(false)}
-        onAdminSuspend={initiateSuspension}
-      />
-
-      {/* Admin Suspension Modal */}
-      {showSuspendModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-xl">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">
-              {suspendType === 'single' ? 'Suspend Product' : 'Suspend Seller Products'}
-            </h3>
-            <p className="text-sm text-gray-600 mb-4">
-              {suspendType === 'single' 
-                ? "This product will be hidden from the marketplace immediately. The seller cannot undo this."
-                : "ALL products from this seller will be hidden. Use with caution."}
-            </p>
-            
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Reason for Suspension
-            </label>
-            <textarea
-              value={suspendReason}
-              onChange={(e) => setSuspendReason(e.target.value)}
-              placeholder="e.g. Violation of terms, Counterfeit item..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent resize-none text-sm mb-4"
-              rows={3}
-              autoFocus
-            />
-            
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setShowSuspendModal(false)}
-                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmSuspension}
-                disabled={!suspendReason.trim() || isPending}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
-              >
-                {isPending ? 'Processing...' : 'Confirm Suspension'}
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Product Detail Page */}
+      {selectedProduct && isSheetOpen && (
+        <ProductDetailPage
+          product={selectedProduct}
+          onBack={() => setIsSheetOpen(false)}
+          onAction={() => router.refresh()}
+        />
       )}
     </div>
   );

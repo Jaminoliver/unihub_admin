@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { useState } from 'react';
-import { processWithdrawal, processAllWithdrawals } from '@/app/admin/withdrawals/actions';
+import { processWithdrawal, processAllWithdrawals } from '@/app/admin/dashboard/withdrawals/actions';
 
 interface Withdrawal {
   id: string;

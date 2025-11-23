@@ -14,21 +14,35 @@ export async function adminLogin(prevState: any, formData: FormData) {
 
   const supabase = await createServerSupabaseClient();
 
-  const { data: admin, error } = await supabase
-    .rpc('verify_admin_login', {
-      admin_email: email,
-      admin_password: password
-    });
+  // Sign in with Supabase Auth
+  const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
 
-  if (error || !admin) {
+  if (authError || !authData.user) {
     return { error: 'Invalid email or password' };
   }
 
+  // Verify user is an admin
+  const { data: admin, error: adminError } = await supabase
+    .from('admins')
+    .select('id, email, role, full_name, is_active')
+    .eq('email', email)
+    .single();
+
+  if (adminError || !admin || !admin.is_active) {
+    await supabase.auth.signOut();
+    return { error: 'Admin access required' };
+  }
+
+  // Update last login
   await supabase
     .from('admins')
     .update({ last_login: new Date().toISOString() })
     .eq('email', email);
 
+  // Set admin session cookie
   const cookieStore = await cookies();
   cookieStore.set('admin_session', JSON.stringify({
     id: admin.id,
@@ -46,12 +60,12 @@ export async function adminLogin(prevState: any, formData: FormData) {
 }
 
 export async function getAdminSession() {
-  const cookieStore = await cookies();
-  const session = cookieStore.get('admin_session');
-  
-  if (!session) return null;
-  
   try {
+    const cookieStore = await cookies();
+    const session = cookieStore.get('admin_session');
+    
+    if (!session) return null;
+    
     return JSON.parse(session.value);
   } catch {
     return null;

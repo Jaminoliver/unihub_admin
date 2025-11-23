@@ -9,7 +9,7 @@ import {
   rejectProduct,
   bulkApproveProducts,
   bulkRejectProducts,
-} from '@/app/admin/products/actions';
+} from '@/app/admin/dashboard/products/actions';
 
 // ✅ Fixed: Match the actual return type from getApprovalQueue
 type University = {
@@ -391,7 +391,11 @@ export function ApprovalQueue({ data, sellers = [], search }: ApprovalQueueProps
                       </td>
                       <td className="px-6 py-4">
                         <span className="text-xs text-gray-500">
-                          {new Date(item.created_at).toLocaleDateString()}
+                         {new Date(item.created_at).toLocaleDateString('en-US', { 
+  year: 'numeric', 
+  month: 'short', 
+  day: 'numeric' 
+})}
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right">

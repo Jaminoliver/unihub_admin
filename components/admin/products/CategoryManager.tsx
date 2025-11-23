@@ -4,8 +4,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Plus, Trash2, Edit2 } from 'lucide-react';
-import { createCategory, updateCategory, deleteCategory } from '@/app/admin/products/actions';
-
+import { createCategory, updateCategory, deleteCategory } from '@/app/admin/dashboard/products/actions';
 type Category = {
   id: string;
   name: string;

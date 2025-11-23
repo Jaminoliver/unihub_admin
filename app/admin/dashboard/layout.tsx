@@ -1,9 +1,9 @@
 import { redirect } from 'next/navigation';
-import { getAdminSession } from '@/app/admin/login/actions';
+import { getAdminSession } from '../(auth)/login/actions';
 import { AdminSidebar } from '@/components/admin/AdminSidebar';
 import { AdminHeader } from '@/components/admin/AdminHeader';
 
-export default async function AdminLayout({
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;

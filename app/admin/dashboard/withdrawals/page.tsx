@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { getAdminSession } from '../login/actions';
+import { getAdminSession } from '@/app/admin/(auth)/login/actions';
 import { createAdminSupabaseClient } from '@/lib/supabase/admin';
 import { WithdrawalTabs } from '@/components/admin/WithdrawalTabs';
 
