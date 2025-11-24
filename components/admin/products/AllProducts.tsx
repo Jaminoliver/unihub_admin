@@ -137,12 +137,13 @@ export function AllProducts({
     router.push(`?tab=all&${params.toString()}`);
   };
 
-  const handleSellerChange = (value: string) => {
-    const params = new URLSearchParams(searchParams);
-    if (value !== 'all') params.set('seller', value);
-    else params.delete('seller');
-    router.push(`?tab=all&${params.toString()}`);
-  };
+const handleSellerChange = (value: string) => {
+  const params = new URLSearchParams(searchParams);
+  params.set('tab', 'all'); // Set instead of keeping duplicate
+  if (value !== 'all') params.set('seller', value);
+  else params.delete('seller');
+  router.push(`?${params.toString()}`); // Remove the tab=all& prefix
+};
 
   const openProductDetails = (product: Product) => {
     console.log('Opening product details:', product?.name, product?.id);
