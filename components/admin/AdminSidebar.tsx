@@ -19,7 +19,7 @@ const navigation = [
   { name: 'Users', href: '/admin/dashboard/users', icon: Users },
   { name: 'Products', href: '/admin/dashboard/products', icon: Package },
   { name: 'Orders', href: '/admin/dashboard/orders', icon: ShoppingCart },
-  { name: 'Disputes', href: '/admin/disputes', icon: AlertCircle },
+  { name: 'Disputes', href: '/admin/dashboard/disputes', icon: AlertCircle },
   { name: 'Withdrawals', href: '/admin/dashboard/withdrawals', icon: Wallet },  
   { name: 'Reports', href: '/admin/reports', icon: FileText },
   { name: 'Settings', href: '/admin/settings', icon: Settings },
