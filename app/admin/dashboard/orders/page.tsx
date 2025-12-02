@@ -1,210 +1,182 @@
-import { Suspense } from 'react';
-import { ShoppingCart, DollarSign, Clock, CheckCircle, Package } from 'lucide-react';
+import { redirect } from 'next/navigation';
+import { getAdminSession } from '@/app/admin/(auth)/login/actions';
+import { createAdminSupabaseClient } from '@/lib/supabase/admin';
 import { OrdersTable } from '@/components/admin/orders/OrdersTable';
-import { getAllOrders } from './actions';
-import { getSellers } from '../products/actions';
 
-const TABS = [
-  { id: 'all', label: 'All Orders', icon: ShoppingCart, color: 'from-blue-500 to-indigo-500', bgColor: 'bg-blue-50', textColor: 'text-blue-600' },
-  { id: 'pending', label: 'Pending', icon: Clock, color: 'from-orange-500 to-red-500', bgColor: 'bg-orange-50', textColor: 'text-orange-600' },
-  { id: 'delivered', label: 'Delivered', icon: CheckCircle, color: 'from-green-500 to-emerald-500', bgColor: 'bg-green-50', textColor: 'text-green-600' },
-  { id: 'completed', label: 'Completed', icon: Package, color: 'from-purple-500 to-pink-500', bgColor: 'bg-purple-50', textColor: 'text-purple-600' },
-];
+export default async function OrdersPage() {
+  const session = await getAdminSession();
+  if (!session) redirect('/admin/login');
 
-interface DashboardCardProps {
-  label: string;
-  value: number | string;
-  icon: React.ComponentType<{ className?: string }>;
-  gradient: string;
-}
+  const supabase = createAdminSupabaseClient();
 
-function DashboardCard({ label, value, icon: Icon, gradient }: DashboardCardProps) {
-  return (
-    <div className="relative overflow-hidden bg-white rounded-2xl shadow-lg border border-gray-100 hover:shadow-xl transition-all duration-300">
-      <div className={`absolute top-0 right-0 w-32 h-32 bg-gradient-to-br ${gradient} opacity-10 rounded-full -mr-16 -mt-16`} />
-      <div className="relative p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium text-gray-600 uppercase tracking-wide mb-3">{label}</p>
-            <p className="text-xl font-bold text-gray-900 break-words">{value}</p>
+  console.log('📦 Fetching orders...');
+
+  // Get ALL orders first
+  const { data: orders, error: ordersError } = await supabase
+    .from('orders')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  console.log('✅ Orders fetched:', orders?.length);
+  console.log('❌ Orders error:', ordersError);
+
+  if (ordersError || !orders || orders.length === 0) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/30">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="mb-8">
+            <h1 className="text-4xl font-bold text-gray-900">Orders Management</h1>
+            <p className="text-gray-600 mt-1">View and manage all orders</p>
           </div>
-          <div className={`p-3 bg-gradient-to-br ${gradient} rounded-xl flex-shrink-0`}>
-            <Icon className="h-6 w-6 text-white" />
+          <div className="bg-white p-12 rounded-xl text-center">
+            <p className="text-gray-500">
+              {ordersError ? `Error: ${ordersError.message}` : 'No orders found'}
+            </p>
           </div>
         </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
-function LoadingState() {
-  return (
-    <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-8">
-      <div className="animate-pulse space-y-6">
-        <div className="h-10 bg-gradient-to-r from-gray-200 to-gray-300 rounded-lg w-1/3"></div>
-        <div className="space-y-4">
-          {[...Array(6)].map((_, i) => (
-            <div key={i} className="h-20 bg-gradient-to-r from-gray-100 to-gray-200 rounded-xl"></div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
+  // Get unique IDs
+  const buyerIds = [...new Set(orders.map(o => o.buyer_id).filter(Boolean))];
+  const sellerIds = [...new Set(orders.map(o => o.seller_id).filter(Boolean))];
+  const productIds = [...new Set(orders.map(o => o.product_id).filter(Boolean))];
 
-export default async function OrdersPage({
-  searchParams,
-}: {
-  searchParams: Promise<{
-    tab?: string;
-    search?: string;
-    status?: string;
-    paymentMethod?: string;
-    seller?: string;
-  }>;
-}) {
-  const params = await searchParams;
-  const activeTab = params.tab || 'all';
+  console.log('📊 Fetching related data...');
+  console.log('Buyers:', buyerIds.length);
+  console.log('Sellers:', sellerIds.length);
+  console.log('Products:', productIds.length);
 
-  const statusFilter = activeTab === 'all' ? undefined : activeTab;
-
-  const [ordersData, sellersData] = await Promise.all([
-    getAllOrders({
-      search: params.search,
-      status: statusFilter,
-      paymentMethod: params.paymentMethod,
-      sellerId: params.seller,
-    }),
-    getSellers(),
+  // Fetch all related data in parallel
+  const [buyersRes, sellersRes, productsRes] = await Promise.all([
+    buyerIds.length > 0
+      ? supabase.from('profiles').select('id, full_name, email, state, university_id').in('id', buyerIds)
+      : { data: [], error: null },
+    sellerIds.length > 0
+      ? supabase.from('sellers').select('id, business_name, full_name, email, state, university_id').in('id', sellerIds)
+      : { data: [], error: null },
+    productIds.length > 0
+      ? supabase.from('products').select('id, name, image_urls').in('id', productIds)
+      : { data: [], error: null },
   ]);
 
-  const orders = ordersData.orders || [];
-  const totalOrders = orders.length;
-  const pendingOrders = orders.filter((o) => o.order_status === 'pending').length;
-  const deliveredOrders = orders.filter((o) => o.order_status === 'delivered').length;
-  const completedOrders = orders.filter((o) => o.order_status === 'completed').length;
+  console.log('✅ Buyers:', buyersRes.data?.length, buyersRes.error);
+  console.log('✅ Sellers:', sellersRes.data?.length, sellersRes.error);
+  console.log('✅ Products:', productsRes.data?.length, productsRes.error);
 
-  const totalEscrow = orders.reduce((sum, o) => sum + parseFloat(o.escrow_amount || '0'), 0);
-  const totalCommission = orders.reduce((sum, o) => sum + parseFloat(o.commission_amount || '0'), 0);
+  const buyers = buyersRes.data || [];
+  const sellers = sellersRes.data || [];
+  const products = productsRes.data || [];
 
-  const formatPrice = (amount: number) =>
-    new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(amount);
+  // Get universities
+  const universityIds = [
+    ...buyers.map((b: any) => b.university_id).filter(Boolean),
+    ...sellers.map((s: any) => s.university_id).filter(Boolean),
+  ];
+  const uniqueUniversityIds = [...new Set(universityIds)];
+
+  let universities: Array<{ id: string; name: string }> = [];
+  if (uniqueUniversityIds.length > 0) {
+    const { data: uniData } = await supabase
+      .from('universities')
+      .select('id, name')
+      .in('id', uniqueUniversityIds);
+    universities = uniData || [];
+  }
+
+  console.log('✅ Universities:', universities.length);
+
+  // Create lookup maps
+  const buyerMap = new Map(buyers.map((b: any) => [b.id, b]));
+  const sellerMap = new Map(sellers.map((s: any) => [s.id, s]));
+  const productMap = new Map(products.map((p: any) => [p.id, p]));
+  const universityMap = new Map(universities.map(u => [u.id, u]));
+
+  // Enrich orders
+  const enrichedOrders = orders.map(order => {
+    const buyer = buyerMap.get(order.buyer_id);
+    const seller = sellerMap.get(order.seller_id);
+    const product = productMap.get(order.product_id);
+
+    return {
+      ...order,
+      buyer: buyer ? {
+        ...buyer,
+        university: buyer.university_id ? universityMap.get(buyer.university_id) : null,
+      } : null,
+      seller: seller ? {
+        ...seller,
+        university: seller.university_id ? universityMap.get(seller.university_id) : null,
+      } : null,
+      product: product || null,
+    };
+  });
+
+  console.log('✅ Orders enriched:', enrichedOrders.length);
+
+  // Get stats
+  const stats = {
+    total: orders.length,
+    pending: orders.filter(o => o.order_status === 'pending').length,
+    confirmed: orders.filter(o => o.order_status === 'confirmed').length,
+    shipped: orders.filter(o => o.order_status === 'shipped').length,
+    delivered: orders.filter(o => o.order_status === 'delivered').length,
+    cancelled: orders.filter(o => o.order_status === 'cancelled').length,
+    refunded: orders.filter(o => o.order_status === 'refunded').length,
+  };
+
+  const totalRevenue = orders
+    .filter(o => o.payment_status === 'completed')
+    .reduce((sum, o) => sum + parseFloat(o.total_amount || '0'), 0);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/30">
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        
         <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="p-2 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl">
-              <ShoppingCart className="h-8 w-8 text-white" />
-            </div>
-            <div>
-              <h1 className="text-4xl font-bold text-gray-900">Orders Management</h1>
-              <p className="text-gray-600 mt-1">Monitor transactions and escrow operations</p>
-            </div>
+          <h1 className="text-4xl font-bold text-gray-900">Orders Management</h1>
+          <p className="text-gray-600 mt-1">View and manage all orders</p>
+        </div>
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
+          <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-blue-500">
+            <p className="text-gray-500 text-xs font-medium">Total Orders</p>
+            <p className="text-2xl font-bold text-blue-600 mt-1">{stats.total}</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-yellow-500">
+            <p className="text-gray-500 text-xs font-medium">Pending</p>
+            <p className="text-2xl font-bold text-yellow-600 mt-1">{stats.pending}</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-purple-500">
+            <p className="text-gray-500 text-xs font-medium">Confirmed</p>
+            <p className="text-2xl font-bold text-purple-600 mt-1">{stats.confirmed}</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-indigo-500">
+            <p className="text-gray-500 text-xs font-medium">Shipped</p>
+            <p className="text-2xl font-bold text-indigo-600 mt-1">{stats.shipped}</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-green-500">
+            <p className="text-gray-500 text-xs font-medium">Delivered</p>
+            <p className="text-2xl font-bold text-green-600 mt-1">{stats.delivered}</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-red-500">
+            <p className="text-gray-500 text-xs font-medium">Cancelled</p>
+            <p className="text-2xl font-bold text-red-600 mt-1">{stats.cancelled}</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-cyan-500">
+            <p className="text-gray-500 text-xs font-medium">Total Revenue</p>
+            <p className="text-lg font-bold text-cyan-600 mt-1">
+              ₦{totalRevenue.toLocaleString('en-NG', { minimumFractionDigits: 0 })}
+            </p>
           </div>
         </div>
 
-        <div className="space-y-6 mb-8">
-          {/* Top Row - 3 Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <DashboardCard 
-              label="Total Orders" 
-              value={totalOrders.toLocaleString()} 
-              icon={ShoppingCart} 
-              gradient="from-blue-500 to-indigo-600" 
-            />
-            <DashboardCard 
-              label="Pending" 
-              value={pendingOrders.toLocaleString()} 
-              icon={Clock} 
-              gradient="from-orange-500 to-red-600" 
-            />
-            <DashboardCard 
-              label="Delivered" 
-              value={deliveredOrders.toLocaleString()} 
-              icon={CheckCircle} 
-              gradient="from-green-500 to-emerald-600" 
-            />
-          </div>
-          
-          {/* Bottom Row - 2 Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <DashboardCard 
-              label="Total Escrow" 
-              value={formatPrice(totalEscrow)} 
-              icon={DollarSign} 
-              gradient="from-purple-500 to-pink-600" 
-            />
-            <DashboardCard 
-              label="Commission Earned" 
-              value={formatPrice(totalCommission)} 
-              icon={DollarSign} 
-              gradient="from-yellow-500 to-orange-600" 
-            />
-          </div>
-        </div>
-
-       <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden mb-8">
-          <div className="grid grid-cols-1 md:grid-cols-4">
-            {TABS.map((tab, index) => {
-              const Icon = tab.icon;
-              const isActive = activeTab === tab.id;
-              const count =
-                tab.id === 'all' ? totalOrders :
-                tab.id === 'pending' ? pendingOrders :
-                tab.id === 'delivered' ? deliveredOrders :
-                completedOrders;
-
-              const linkClass = `relative p-6 flex items-center gap-4 transition-all duration-300 group ${
-                index < TABS.length - 1 ? 'border-r border-gray-200' : ''
-              } ${isActive ? tab.bgColor : 'hover:bg-gray-50'}`;
-
-              const iconWrapperClass = `p-3 rounded-xl transition-all duration-300 ${
-                isActive ? 'bg-gradient-to-br ' + tab.color : 'bg-gray-100 group-hover:bg-gray-200'
-              }`;
-
-              const iconClass = `h-6 w-6 ${isActive ? 'text-white' : 'text-gray-600'}`;
-
-              const labelClass = `font-semibold ${isActive ? tab.textColor : 'text-gray-700'}`;
-
-              const badgeClass = `px-2 py-0.5 rounded-full text-xs font-bold ${
-                isActive ? tab.bgColor + ' ' + tab.textColor : 'bg-gray-200 text-gray-700'
-              }`;
-
-              return (
-                <a key={tab.id} href={`?tab=${tab.id}`} className={linkClass}>
-                  {isActive && (
-                    <div className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${tab.color}`} />
-                  )}
-                  <div className={iconWrapperClass}>
-                    <Icon className={iconClass} />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className={labelClass}>{tab.label}</p>
-                      {count > 0 && <span className={badgeClass}>{count}</span>}
-                    </div>
-                  </div>
-                </a>
-              );
-            })}
-          </div>
-        </div>
-        
-        <Suspense fallback={<LoadingState />}>
-          <OrdersTable 
-            orders={orders} 
-            sellers={sellersData.sellers || []} 
-            filters={{
-              search: params.search,
-              status: params.status,
-              paymentMethod: params.paymentMethod,
-              seller: params.seller,
-            }}
-          />
-        </Suspense>
+        {/* Orders Table */}
+        <OrdersTable 
+          orders={enrichedOrders} 
+          sellers={sellers}
+        />
       </div>
     </div>
   );

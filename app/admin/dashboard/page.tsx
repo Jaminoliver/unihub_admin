@@ -1,6 +1,7 @@
 import { createAdminSupabaseClient } from '@/lib/supabase/admin';
 import { EnhancedDashboardStats } from '@/components/admin/dashboard/EnhancedDashboardStats';
 import { EnhancedRecentActivity } from '@/components/admin/dashboard/EnhancedRecentActivity';
+import { DashboardCharts } from '@/components/admin/dashboard/DashboardCharts';
 
 export default async function AdminDashboardPage() {
   const supabase = createAdminSupabaseClient();
@@ -105,12 +106,13 @@ export default async function AdminDashboardPage() {
   };
 
   return (
-    <>
+    <div className="space-y-6">
       <EnhancedDashboardStats stats={stats} />
+      <DashboardCharts />
       <EnhancedRecentActivity 
         recentOrders={recentOrders || []} 
         recentUsers={recentUsers || []} 
       />
-    </>
+    </div>
   );
 }

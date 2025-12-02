@@ -1,7 +1,7 @@
 'use server';
 
-import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
+import { createServerSupabaseClient, createServiceRoleClient } from '@/lib/supabase/server';
 
 async function verifyAdmin() {
   const supabase = await createServerSupabaseClient();
@@ -83,9 +83,29 @@ export async function getAllBuyers(filters?: {
 }
 
 export async function getBuyerDetails(buyerId: string) {
+  console.log('🔵 getBuyerDetails called with buyerId:', buyerId);
+  
   try {
-    const supabase = await createServerSupabaseClient();
+    // First verify the user is an admin using regular client
+    const regularSupabase = await createServerSupabaseClient();
+    const { data: { user } } = await regularSupabase.auth.getUser();
+    if (!user) throw new Error('Not authenticated');
+
+    const { data: admin } = await regularSupabase
+      .from('admins')
+      .select('id, email')
+      .eq('email', user.email)
+      .maybeSingle();
+
+    if (!admin) throw new Error('Admin access required');
+    console.log('✅ Admin verified:', admin.email);
+
+    // Now use service role client to bypass RLS and fetch all data
+    const supabase = createServiceRoleClient();
+    console.log('🔵 Using service role client to bypass RLS');
     
+    // Get buyer profile
+    console.log('🔵 Fetching buyer profile...');
     const { data: buyer, error: buyerError } = await supabase
       .from('profiles')
       .select(`
@@ -95,30 +115,289 @@ export async function getBuyerDetails(buyerId: string) {
       .eq('id', buyerId)
       .single();
 
-    if (buyerError) throw buyerError;
+    if (buyerError) {
+      console.error('❌ Buyer Error:', buyerError);
+      throw buyerError;
+    }
+    console.log('✅ Buyer fetched successfully:', buyer);
 
-    // Get orders
-    const { data: orders } = await supabase
+    // Get orders with product and seller details
+    console.log('🔵 Fetching orders for buyer_id:', buyerId);
+    const { data: orders, error: ordersError } = await supabase
       .from('orders')
-      .select('id, order_number, total_amount, order_status, created_at')
+      .select(`
+        id, 
+        order_number, 
+        total_amount,
+        unit_price,
+        quantity,
+        order_status, 
+        payment_status,
+        payment_method,
+        created_at,
+        updated_at,
+        delivery_confirmed_at,
+        escrow_amount,
+        escrow_released,
+        selected_color,
+        selected_size,
+        product_id,
+        seller_id
+      `)
       .eq('buyer_id', buyerId)
-      .order('created_at', { ascending: false })
-      .limit(10);
+      .order('created_at', { ascending: false });
 
-    return { 
+    if (ordersError) {
+      console.error('❌ Orders Error:', ordersError);
+      console.error('❌ Orders Error details:', JSON.stringify(ordersError, null, 2));
+    } else {
+      console.log('✅ Orders fetched successfully. Count:', orders?.length || 0);
+      console.log('✅ Orders data:', JSON.stringify(orders, null, 2));
+    }
+
+    // Get product details for each order
+    const ordersWithProducts: any[] = [];
+    if (orders && orders.length > 0) {
+      console.log('🔵 Fetching product details for', orders.length, 'orders...');
+      for (const order of orders) {
+        const { data: product } = await supabase
+          .from('products')
+          .select('id, name, image_urls, price')
+          .eq('id', order.product_id)
+          .single();
+
+        const { data: seller } = await supabase
+          .from('profiles')
+          .select('id, full_name, email')
+          .eq('id', order.seller_id)
+          .single();
+
+        ordersWithProducts.push({
+          ...order,
+          product: product || null,
+          seller: seller || null,
+        });
+      }
+      console.log('✅ Orders with products:', ordersWithProducts.length, 'orders enriched');
+    } else {
+      console.log('⚠️ No orders found for this buyer');
+    }
+
+    // Get transactions
+    console.log('🔵 Fetching transactions for user_id:', buyerId);
+    const { data: transactions, error: transactionsError } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('user_id', buyerId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (transactionsError) {
+      console.error('❌ Transactions Error:', transactionsError);
+      console.error('❌ Transactions Error details:', JSON.stringify(transactionsError, null, 2));
+    } else {
+      console.log('✅ Transactions fetched successfully. Count:', transactions?.length || 0);
+      console.log('✅ Transactions data:', JSON.stringify(transactions, null, 2));
+    }
+
+    // Get delivery addresses
+    console.log('🔵 Fetching delivery addresses for user_id:', buyerId);
+    const { data: addresses, error: addressesError } = await supabase
+      .from('delivery_addresses')
+      .select('*')
+      .eq('user_id', buyerId)
+      .order('is_default', { ascending: false });
+
+    if (addressesError) {
+      console.error('❌ Addresses Error:', addressesError);
+      console.error('❌ Addresses Error details:', JSON.stringify(addressesError, null, 2));
+    } else {
+      console.log('✅ Addresses fetched successfully. Count:', addresses?.length || 0);
+      console.log('✅ Addresses data:', JSON.stringify(addresses, null, 2));
+    }
+
+    // Get reviews written by this buyer
+    const { data: reviews } = await supabase
+      .from('reviews')
+      .select(`
+        id,
+        product_id,
+        rating,
+        comment,
+        is_verified_purchase,
+        helpful_count,
+        created_at,
+        order_id
+      `)
+      .eq('user_id', buyerId)
+      .order('created_at', { ascending: false });
+
+    // Get reviews with product details
+    const reviewsWithProducts: any[] = [];
+    if (reviews && reviews.length > 0) {
+      for (const review of reviews) {
+        const { data: product } = await supabase
+          .from('products')
+          .select('id, name, image_urls')
+          .eq('id', review.product_id)
+          .single();
+
+        reviewsWithProducts.push({
+          ...review,
+          product: product || null,
+        });
+      }
+    }
+
+    // Get cart items
+    const { data: cartItems } = await supabase
+      .from('cart')
+      .select(`
+        id,
+        product_id,
+        quantity,
+        selected_color,
+        selected_size,
+        created_at
+      `)
+      .eq('user_id', buyerId);
+
+    // Get cart items with product details
+    const cartWithProducts: any[] = [];
+    if (cartItems && cartItems.length > 0) {
+      for (const item of cartItems) {
+        const { data: product } = await supabase
+          .from('products')
+          .select('id, name, price, image_urls')
+          .eq('id', item.product_id)
+          .single();
+
+        cartWithProducts.push({
+          ...item,
+          product: product || null,
+        });
+      }
+    }
+
+    // Get wishlist items
+    const { data: wishlistItems } = await supabase
+      .from('wishlist')
+      .select('id, product_id, created_at')
+      .eq('user_id', buyerId);
+
+    // Get wishlist with product details
+    const wishlistWithProducts: any[] = [];
+    if (wishlistItems && wishlistItems.length > 0) {
+      for (const item of wishlistItems) {
+        const { data: product } = await supabase
+          .from('products')
+          .select('id, name, price, image_urls')
+          .eq('id', item.product_id)
+          .single();
+
+        wishlistWithProducts.push({
+          ...item,
+          product: product || null,
+        });
+      }
+    }
+
+    // Get escrow records for this buyer
+    const { data: escrowRecords } = await supabase
+      .from('escrow')
+      .select(`
+        id,
+        order_id,
+        amount,
+        status,
+        hold_until,
+        created_at,
+        released_at,
+        refunded_at,
+        refund_reason
+      `)
+      .eq('buyer_id', buyerId)
+      .order('created_at', { ascending: false });
+
+    // Calculate statistics
+    const totalSpent = ordersWithProducts.reduce((sum, order) => {
+      if (order.payment_status === 'completed') {
+        return sum + parseFloat(order.total_amount || '0');
+      }
+      return sum;
+    }, 0);
+
+    const completedOrders = ordersWithProducts.filter(o => 
+      o.order_status === 'delivered' || o.order_status === 'completed'
+    ).length;
+
+    const pendingOrders = ordersWithProducts.filter(o => 
+      o.order_status === 'pending' || o.order_status === 'confirmed' || o.order_status === 'shipped'
+    ).length;
+
+    const statistics = {
+      totalOrders: ordersWithProducts.length,
+      completedOrders,
+      pendingOrders,
+      totalSpent,
+      averageOrderValue: ordersWithProducts.length > 0 ? totalSpent / ordersWithProducts.length : 0,
+      totalReviews: reviewsWithProducts.length,
+      cartItemsCount: cartWithProducts.length,
+      wishlistItemsCount: wishlistWithProducts.length,
+    };
+
+    console.log('✅ Statistics calculated:', statistics);
+
+    const result = { 
       buyer: {
         ...buyer,
         university: Array.isArray(buyer.university) ? buyer.university[0] : buyer.university,
       }, 
-      orders: orders || [],
+      orders: ordersWithProducts,
+      transactions: transactions || [],
+      addresses: addresses || [],
+      reviews: reviewsWithProducts,
+      cart: cartWithProducts,
+      wishlist: wishlistWithProducts,
+      escrow: escrowRecords || [],
+      statistics,
       error: null 
     };
+
+    console.log('✅ FINAL RESULT BEING RETURNED:');
+    console.log('   - Buyer:', result.buyer?.full_name);
+    console.log('   - Orders count:', result.orders.length);
+    console.log('   - Transactions count:', result.transactions.length);
+    console.log('   - Addresses count:', result.addresses.length);
+    console.log('   - Statistics:', result.statistics);
+    
+    return result;
   } catch (err) {
-    return { buyer: null, orders: [], error: err instanceof Error ? err.message : 'Unknown error' };
+    console.error('❌ CRITICAL ERROR in getBuyerDetails:', err);
+    console.error('❌ Error stack:', err instanceof Error ? err.stack : 'No stack trace');
+    return { 
+      buyer: null, 
+      orders: [], 
+      transactions: [],
+      addresses: [],
+      reviews: [],
+      cart: [],
+      wishlist: [],
+      escrow: [],
+      statistics: {
+        totalOrders: 0,
+        completedOrders: 0,
+        pendingOrders: 0,
+        totalSpent: 0,
+        averageOrderValue: 0,
+        totalReviews: 0,
+        cartItemsCount: 0,
+        wishlistItemsCount: 0,
+      },
+      error: err instanceof Error ? err.message : 'Unknown error' 
+    };
   }
 }
-
-// ============================================
 // SELLERS ACTIONS
 // ============================================
 

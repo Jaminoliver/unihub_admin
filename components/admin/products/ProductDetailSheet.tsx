@@ -37,10 +37,11 @@ import {
   Shield,
   MessageSquare,
   BarChart3,
+  FileText,
 } from 'lucide-react';
 import Image from 'next/image';
 import { format } from 'date-fns';
-import { approveProduct, rejectProduct, toggleProductSuspension, banProduct, unbanProduct } from '@/app/admin/dashboard/products/actions';
+import { approveProduct, rejectProduct, toggleProductSuspension, banProduct, unbanProduct, getProductOrderStats } from '@/app/admin/dashboard/products/actions';
 
 type DetailedProduct = {
   id: string;
@@ -90,9 +91,17 @@ interface ProductDetailPageProps {
   product: DetailedProduct;
   onBack: () => void;
   onAction?: () => void;
+  appealContext?: {
+    appealId: string;
+    appealMessage: string;
+    appealStatus: 'pending' | 'approved' | 'rejected';
+    appealCreatedAt: string;
+    appealUpdatedAt: string;
+    adminReason?: string;
+  };
 }
 
-export function ProductDetailPage({ product, onBack, onAction }: ProductDetailPageProps) {
+export function ProductDetailPage({ product, onBack, onAction, appealContext }: ProductDetailPageProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [actionDialog, setActionDialog] = useState<'reject' | 'suspend' | 'ban' | null>(null);
@@ -115,20 +124,18 @@ export function ProductDetailPage({ product, onBack, onAction }: ProductDetailPa
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
     
-    const [viewsResult, reviewsResult, deliveredResult, ordersResult] = await Promise.all([
+    const [viewsResult, reviewsResult, orderStatsResult] = await Promise.all([
       supabase.from('product_views').select('*', { count: 'exact', head: true }).eq('product_id', product.id),
       supabase.from('reviews').select('rating').eq('product_id', product.id),
-      supabase.from('orders').select('*', { count: 'exact', head: true }).eq('product_id', product.id).eq('order_status', 'delivered'),
-      supabase.from('orders').select('quantity').eq('product_id', product.id),
+      getProductOrderStats(product.id),
     ]);
 
-    const totalSold = ordersResult.data?.reduce((sum, order) => sum + (parseInt(order.quantity) || 0), 0) || 0;
     const wishlistCount = product.wishlist_count || 0;
 
     setStats({
       view_count: viewsResult.count || 0,
-      sold_count: totalSold,
-      delivery_count: deliveredResult.count || 0,
+      sold_count: orderStatsResult.success ? orderStatsResult.data?.sold_count || 0 : 0,
+      delivery_count: orderStatsResult.success ? orderStatsResult.data?.delivery_count || 0 : 0,
       favorite_count: wishlistCount,
       review_count: reviewsResult.data?.length || 0,
       average_rating: reviewsResult.data?.length 
@@ -228,6 +235,19 @@ export function ProductDetailPage({ product, onBack, onAction }: ProductDetailPa
     return <Badge variant="outline" className="text-sm">Inactive</Badge>;
   };
 
+  const getAppealStatusBadge = (status: string) => {
+    switch (status) {
+      case 'pending':
+        return <Badge className="bg-orange-500 hover:bg-orange-600">⏳ Pending Review</Badge>;
+      case 'approved':
+        return <Badge className="bg-green-500 hover:bg-green-600">✓ Approved</Badge>;
+      case 'rejected':
+        return <Badge className="bg-red-500 hover:bg-red-600">✗ Rejected</Badge>;
+      default:
+        return null;
+    }
+  };
+
   return (
     <>
       <div className="fixed inset-0 z-50 bg-white animate-in fade-in slide-in-from-right duration-300">
@@ -244,6 +264,7 @@ export function ProductDetailPage({ product, onBack, onAction }: ProductDetailPa
                 </div>
               </div>
               <div className="flex items-center gap-3">
+                {appealContext && getAppealStatusBadge(appealContext.appealStatus)}
                 {getStatusBadge()}
               </div>
             </div>
@@ -253,6 +274,97 @@ export function ProductDetailPage({ product, onBack, onAction }: ProductDetailPa
         <div className="max-w-[1600px] mx-auto px-6 py-8 overflow-y-auto h-[calc(100vh-80px)]">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div className="lg:col-span-2 space-y-6">
+              {/* Appeal Context Section */}
+              {appealContext && (
+                <div className={`border-2 rounded-2xl p-6 animate-in fade-in slide-in-from-left duration-300 ${
+                  appealContext.appealStatus === 'pending' 
+                    ? 'bg-orange-50 border-orange-300' 
+                    : appealContext.appealStatus === 'approved'
+                    ? 'bg-green-50 border-green-300'
+                    : 'bg-red-50 border-red-300'
+                }`}>
+                  <div className="flex items-start gap-4">
+                    <div className={`p-3 rounded-full ${
+                      appealContext.appealStatus === 'pending'
+                        ? 'bg-orange-100'
+                        : appealContext.appealStatus === 'approved'
+                        ? 'bg-green-100'
+                        : 'bg-red-100'
+                    }`}>
+                      <FileText className={`h-6 w-6 ${
+                        appealContext.appealStatus === 'pending'
+                          ? 'text-orange-600'
+                          : appealContext.appealStatus === 'approved'
+                          ? 'text-green-600'
+                          : 'text-red-600'
+                      }`} />
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className={`text-lg font-bold ${
+                          appealContext.appealStatus === 'pending'
+                            ? 'text-orange-900'
+                            : appealContext.appealStatus === 'approved'
+                            ? 'text-green-900'
+                            : 'text-red-900'
+                        }`}>
+                          {appealContext.appealStatus === 'pending' && '📝 Active Appeal - Awaiting Review'}
+                          {appealContext.appealStatus === 'approved' && '✅ Appeal Approved'}
+                          {appealContext.appealStatus === 'rejected' && '❌ Appeal Rejected'}
+                        </h3>
+                        {getAppealStatusBadge(appealContext.appealStatus)}
+                      </div>
+                      
+                      <div className="space-y-3">
+                        <div className={`p-4 rounded-lg border ${
+                          appealContext.appealStatus === 'pending'
+                            ? 'bg-white border-orange-200'
+                            : appealContext.appealStatus === 'approved'
+                            ? 'bg-white border-green-200'
+                            : 'bg-white border-red-200'
+                        }`}>
+                          <p className={`text-xs font-semibold uppercase mb-2 ${
+                            appealContext.appealStatus === 'pending'
+                              ? 'text-orange-600'
+                              : appealContext.appealStatus === 'approved'
+                              ? 'text-green-600'
+                              : 'text-red-600'
+                          }`}>
+                            Seller's Appeal Message
+                          </p>
+                          <p className="text-sm text-gray-900 leading-relaxed">{appealContext.appealMessage}</p>
+                        </div>
+
+                        {appealContext.adminReason && appealContext.appealStatus === 'rejected' && (
+                          <div className="p-4 bg-white rounded-lg border border-red-200">
+                            <p className="text-xs font-semibold text-red-600 uppercase mb-2">
+                              Admin Rejection Reason
+                            </p>
+                            <p className="text-sm text-gray-900 leading-relaxed">{appealContext.adminReason}</p>
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-4 text-xs text-gray-600">
+                          <div className="flex items-center gap-1">
+                            <Calendar className="h-3 w-3" />
+                            <span>Submitted: {format(new Date(appealContext.appealCreatedAt), 'PPP p')}</span>
+                          </div>
+                          {appealContext.appealStatus !== 'pending' && (
+                            <>
+                              <span>•</span>
+                              <div className="flex items-center gap-1">
+                                <Calendar className="h-3 w-3" />
+                                <span>Processed: {format(new Date(appealContext.appealUpdatedAt), 'PPP p')}</span>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm animate-in fade-in slide-in-from-left duration-500">
                 <div className="relative aspect-square rounded-xl overflow-hidden bg-gray-100 mb-4">
                   <Image src={product.image_urls[selectedImage]} alt={product.name} fill className="object-cover transition-transform duration-300 hover:scale-105" />

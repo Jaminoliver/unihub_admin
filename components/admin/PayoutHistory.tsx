@@ -2,11 +2,11 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Building2, User, Calendar, CreditCard, CheckCircle, XCircle, Wallet } from 'lucide-react';
+import { Building2, User, Calendar, CreditCard, CheckCircle, XCircle, Wallet, Ban } from 'lucide-react';
 
 interface PayoutHistoryProps {
   withdrawals: any[];
-  status: 'completed' | 'failed';
+  status: 'completed' | 'failed' | 'rejected';
 }
 
 export function PayoutHistory({ withdrawals, status }: PayoutHistoryProps) {
@@ -15,12 +15,14 @@ export function PayoutHistory({ withdrawals, status }: PayoutHistoryProps) {
       <Card>
         <CardHeader>
           <CardTitle>
-            {status === 'completed' ? 'Payout History' : 'Failed Withdrawals'}
+            {status === 'completed' && 'Payout History'}
+            {status === 'failed' && 'Failed Withdrawals'}
+            {status === 'rejected' && 'Rejected Withdrawals'}
           </CardTitle>
           <CardDescription>
-            {status === 'completed' 
-              ? 'Successfully processed withdrawal requests' 
-              : 'Withdrawal requests that failed to process'}
+            {status === 'completed' && 'Successfully processed withdrawal requests'}
+            {status === 'failed' && 'Withdrawal requests that failed to process'}
+            {status === 'rejected' && 'Withdrawal requests rejected by admin'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -37,7 +39,9 @@ export function PayoutHistory({ withdrawals, status }: PayoutHistoryProps) {
     <Card>
       <CardHeader>
         <CardTitle>
-          {status === 'completed' ? 'Payout History' : 'Failed Withdrawals'}
+          {status === 'completed' && 'Payout History'}
+          {status === 'failed' && 'Failed Withdrawals'}
+          {status === 'rejected' && 'Rejected Withdrawals'}
         </CardTitle>
         <CardDescription>
           {withdrawals.length} {status} withdrawal{withdrawals.length !== 1 ? 's' : ''}
@@ -57,13 +61,13 @@ export function PayoutHistory({ withdrawals, status }: PayoutHistoryProps) {
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-start gap-4 flex-1">
                     <div className={`rounded-full p-3 ${
-                      status === 'completed' ? 'bg-green-100' : 'bg-red-100'
+                      status === 'completed' ? 'bg-green-100' : 
+                      status === 'failed' ? 'bg-red-100' : 
+                      'bg-gray-100'
                     }`}>
-                      {status === 'completed' ? (
-                        <CheckCircle className="h-6 w-6 text-green-600" />
-                      ) : (
-                        <XCircle className="h-6 w-6 text-red-600" />
-                      )}
+                      {status === 'completed' && <CheckCircle className="h-6 w-6 text-green-600" />}
+                      {status === 'failed' && <XCircle className="h-6 w-6 text-red-600" />}
+                      {status === 'rejected' && <Ban className="h-6 w-6 text-gray-600" />}
                     </div>
                     
                     <div className="flex-1">
@@ -71,7 +75,11 @@ export function PayoutHistory({ withdrawals, status }: PayoutHistoryProps) {
                         <h3 className="font-semibold text-lg text-gray-900">
                           {seller?.business_name || 'Unknown Seller'}
                         </h3>
-                        <Badge variant={status === 'completed' ? 'default' : 'destructive'}>
+                        <Badge variant={
+                          status === 'completed' ? 'default' : 
+                          status === 'failed' ? 'destructive' : 
+                          'secondary'
+                        }>
                           {status}
                         </Badge>
                       </div>
@@ -79,7 +87,7 @@ export function PayoutHistory({ withdrawals, status }: PayoutHistoryProps) {
                       <div className="grid grid-cols-2 gap-4 text-sm">
                         <div className="flex items-center gap-2 text-gray-600">
                           <User className="h-4 w-4" />
-                          <span>{profile?.full_name || 'N/A'}</span>
+                          <span>{profile?.full_name || seller?.full_name || 'N/A'}</span>
                         </div>
                         <div className="flex items-center gap-2 text-gray-600">
                           <Building2 className="h-4 w-4" />
@@ -92,7 +100,11 @@ export function PayoutHistory({ withdrawals, status }: PayoutHistoryProps) {
                         <div className="flex items-center gap-2 text-gray-600">
                           <Calendar className="h-4 w-4" />
                           <span>
-                            {new Date(status === 'completed' ? withdrawal.processed_at : withdrawal.created_at).toLocaleDateString('en-NG', {
+                            {new Date(
+                              status === 'completed' ? withdrawal.processed_at : 
+                              status === 'rejected' ? withdrawal.rejected_at : 
+                              withdrawal.created_at
+                            ).toLocaleDateString('en-NG', {
                               year: 'numeric',
                               month: 'short',
                               day: 'numeric',
@@ -111,6 +123,22 @@ export function PayoutHistory({ withdrawals, status }: PayoutHistoryProps) {
                         </div>
                       )}
 
+                      {withdrawal.rejected_reason && (
+                        <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded">
+                          <p className="text-sm text-gray-800">
+                            <strong>Rejection Reason:</strong> {withdrawal.rejected_reason}
+                          </p>
+                        </div>
+                      )}
+
+                      {withdrawal.admin_notes && (
+                        <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded">
+                          <p className="text-sm text-blue-800">
+                            <strong>Admin Notes:</strong> {withdrawal.admin_notes}
+                          </p>
+                        </div>
+                      )}
+
                       {withdrawal.paystack_transfer_code && (
                         <div className="mt-3 text-xs text-gray-500">
                           Transfer Code: {withdrawal.paystack_transfer_code}
@@ -121,7 +149,9 @@ export function PayoutHistory({ withdrawals, status }: PayoutHistoryProps) {
 
                   <div className="text-right ml-4">
                     <p className={`text-2xl font-bold ${
-                      status === 'completed' ? 'text-green-600' : 'text-red-600'
+                      status === 'completed' ? 'text-green-600' : 
+                      status === 'failed' ? 'text-red-600' : 
+                      'text-gray-600'
                     }`}>
                       ₦{parseFloat(withdrawal.amount).toLocaleString('en-NG', {
                         minimumFractionDigits: 2
@@ -143,6 +173,24 @@ export function PayoutHistory({ withdrawals, status }: PayoutHistoryProps) {
                     })}
                     {' • '}
                     Processed: {new Date(withdrawal.processed_at).toLocaleDateString('en-NG', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </div>
+                )}
+
+                {status === 'rejected' && (
+                  <div className="pt-3 border-t border-gray-200 text-xs text-gray-500">
+                    Requested: {new Date(withdrawal.created_at).toLocaleDateString('en-NG', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                    {' • '}
+                    Rejected: {new Date(withdrawal.rejected_at).toLocaleDateString('en-NG', {
                       month: 'short',
                       day: 'numeric',
                       hour: '2-digit',

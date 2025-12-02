@@ -4,6 +4,25 @@ import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { createAdminSupabaseClient } from '@/lib/supabase/admin';
 import { revalidatePath } from 'next/cache';
 
+async function updateCategoryCount(categoryId: string) {
+  try {
+    const supabase = createAdminSupabaseClient();
+    const { count } = await supabase
+      .from('products')
+      .select('*', { count: 'exact', head: true })
+      .eq('category_id', categoryId)
+      .eq('is_available', true)
+      .eq('approval_status', 'approved');
+    
+    await supabase
+      .from('categories')
+      .update({ product_count: count || 0 })
+      .eq('id', categoryId);
+  } catch (err) {
+    console.error('Error updating category count:', err);
+  }
+}
+
 async function verifyAdmin() {
   const supabase = await createServerSupabaseClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -157,6 +176,9 @@ export async function approveProduct(productId: string) {
 
     const { data: admin } = await supabase.from('admins').select('id').eq('email', user.email).maybeSingle();
 
+    // Get product category before approval
+    const { data: product } = await supabase.from('products').select('seller_id, name, category_id').eq('id', productId).single();
+
     await supabase.from('product_approvals').update({
       status: 'approved',
       approved_by: admin?.id || null,
@@ -171,7 +193,11 @@ export async function approveProduct(productId: string) {
 
     if (error) throw error;
 
-    const { data: product } = await supabase.from('products').select('seller_id, name').eq('id', productId).single();
+    // Update category count
+    if (product?.category_id) {
+      await updateCategoryCount(product.category_id);
+    }
+
     if (product) {
       await supabase.from('notifications').insert({
         user_id: product.seller_id,
@@ -197,6 +223,9 @@ export async function rejectProduct(productId: string, reason: string) {
 
     const { data: admin } = await supabase.from('admins').select('id').eq('email', user.email).maybeSingle();
 
+    // Get product category before rejection
+    const { data: product } = await supabase.from('products').select('seller_id, name, category_id').eq('id', productId).single();
+
     await supabase.from('product_approvals').update({
       status: 'rejected',
       rejection_reason: reason,
@@ -212,7 +241,11 @@ export async function rejectProduct(productId: string, reason: string) {
 
     if (error) throw error;
 
-    const { data: product } = await supabase.from('products').select('seller_id, name').eq('id', productId).single();
+    // Update category count
+    if (product?.category_id) {
+      await updateCategoryCount(product.category_id);
+    }
+
     if (product) {
       await supabase.from('notifications').insert({
         user_id: product.seller_id,
@@ -333,7 +366,10 @@ export async function banProduct(productId: string, reason: string) {
       banned_by: user.id,
       ban_reason: reason,
       is_available: false,
-      admin_suspended: true,
+      admin_suspended: false,
+      admin_suspension_reason: null,
+      admin_suspended_at: null,
+      admin_suspended_by: null,
     }).eq('id', productId);
 
     if (error) throw error;
@@ -364,9 +400,22 @@ export async function unbanProduct(productId: string) {
       banned_at: null,
       banned_by: null,
       ban_reason: null,
+      is_available: true,
     }).eq('id', productId);
 
     if (error) throw error;
+
+    const { data: product } = await supabase.from('products').select('seller_id, name').eq('id', productId).single();
+    if (product) {
+      await supabase.from('notifications').insert({
+        user_id: product.seller_id,
+        type: 'product_unbanned',
+        title: 'Product Unbanned ✅',
+        message: `Your product "${product.name}" has been unbanned and is now available.`,
+        is_read: false,
+      });
+    }
+
     revalidatePath('/admin/products');
     return { success: true, error: null };
   } catch (err) {
@@ -472,7 +521,7 @@ export async function rejectAppeal(appealId: string, reason: string) {
 
 export async function getCategories() {
   try {
-    const supabase = await createServerSupabaseClient();
+    const supabase = createAdminSupabaseClient();
     const { data, error } = await supabase.from('categories').select('*').order('name');
     if (error) throw error;
     return { categories: data || [], error: null };
@@ -481,24 +530,36 @@ export async function getCategories() {
   }
 }
 
-export async function createCategory(name: string, description?: string) {
+export async function createCategory(name: string, description?: string, iconUrl?: string) {
   try {
-    const supabase = await createServerSupabaseClient();
-    const { error } = await supabase.from('categories').insert({ name, description });
+    const supabase = createAdminSupabaseClient();
+    const insertData: any = { name, description };
+    
+    if (iconUrl) {
+      insertData.icon_url = iconUrl;
+    }
+    
+    const { error } = await supabase.from('categories').insert(insertData);
     if (error) throw error;
-    revalidatePath('/admin/products');
+    revalidatePath('/admin/dashboard/products/categories');
     return { success: true, error: null };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
   }
 }
 
-export async function updateCategory(categoryId: string, name: string, description?: string) {
+export async function updateCategory(categoryId: string, name: string, description?: string, iconUrl?: string) {
   try {
-    const supabase = await createServerSupabaseClient();
-    const { error } = await supabase.from('categories').update({ name, description }).eq('id', categoryId);
+    const supabase = createAdminSupabaseClient();
+    const updateData: any = { name, description };
+    
+    if (iconUrl !== undefined) {
+      updateData.icon_url = iconUrl;
+    }
+    
+    const { error } = await supabase.from('categories').update(updateData).eq('id', categoryId);
     if (error) throw error;
-    revalidatePath('/admin/products');
+    revalidatePath('/admin/dashboard/products/categories');
     return { success: true, error: null };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
@@ -507,10 +568,248 @@ export async function updateCategory(categoryId: string, name: string, descripti
 
 export async function deleteCategory(categoryId: string) {
   try {
-    const supabase = await createServerSupabaseClient();
+    const supabase = createAdminSupabaseClient();
     const { error } = await supabase.from('categories').delete().eq('id', categoryId);
     if (error) throw error;
-    revalidatePath('/admin/products');
+    revalidatePath('/admin/dashboard/products/categories');
+    return { success: true, error: null };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+  }
+}
+
+export async function getProductOrderStats(productId: string) {
+  try {
+    const supabase = createAdminSupabaseClient();
+
+    const [deliveredResult, ordersResult] = await Promise.all([
+      supabase.from('orders').select('*', { count: 'exact', head: true }).eq('product_id', productId).eq('order_status', 'delivered'),
+      supabase.from('orders').select('quantity').eq('product_id', productId).eq('order_status', 'delivered'),
+    ]);
+
+    const totalSold = ordersResult.data?.reduce((sum, order) => sum + (parseInt(order.quantity) || 0), 0) || 0;
+
+    return {
+      success: true,
+      data: {
+        sold_count: totalSold,
+        delivery_count: deliveredResult.count || 0,
+      }
+    };
+  } catch (err) {
+    console.error('Error fetching order stats:', err);
+    return { success: false, data: null };
+  }
+}
+
+// ============= SPECIAL DEALS ACTIONS =============
+
+export async function getSpecialDeals() {
+  try {
+    const supabase = createAdminSupabaseClient();
+    const { data, error } = await supabase
+      .from('special_deals')
+      .select('*')
+      .order('sort_order');
+    
+    if (error) throw error;
+    return { specialDeals: data || [], error: null };
+  } catch (err) {
+    return { specialDeals: [], error: err instanceof Error ? err.message : 'Unknown error' };
+  }
+}
+
+export async function createSpecialDeal(
+  name: string,
+  subtitle: string,
+  dealType: string,
+  iconName: string,
+  color: string,
+  imageUrl?: string
+) {
+  console.log('=========== CREATE SPECIAL DEAL DEBUG ===========');
+  console.log('📝 Input params:', { name, subtitle, dealType, iconName, color, imageUrl });
+  
+  try {
+    console.log('🔧 Creating admin supabase client...');
+    const supabase = createAdminSupabaseClient();
+    console.log('✅ Admin client created successfully');
+
+    // Test a simple select first
+    console.log('🔍 Testing SELECT query...');
+    const { data: testData, error: testError } = await supabase
+      .from('special_deals')
+      .select('id')
+      .limit(1);
+    
+    console.log('📊 Test SELECT result:', { 
+      success: !testError, 
+      error: testError?.message,
+      dataCount: testData?.length 
+    });
+
+    // Get max sort_order
+    console.log('🔍 Querying max sort_order...');
+    const { data: maxData, error: maxError } = await supabase
+      .from('special_deals')
+      .select('sort_order')
+      .order('sort_order', { ascending: false })
+      .limit(1)
+      .single();
+    
+    console.log('📊 Max sort order result:', { 
+      maxData, 
+      maxError: maxError?.message,
+      maxErrorCode: maxError?.code 
+    });
+
+    const nextSortOrder = (maxData?.sort_order || 0) + 1;
+    console.log('🔢 Next sort order:', nextSortOrder);
+
+    const insertData: any = {
+      name,
+      subtitle,
+      deal_type: dealType,
+      icon_name: iconName,
+      color,
+      sort_order: nextSortOrder,
+      is_active: true,
+    };
+
+    if (imageUrl) {
+      insertData.image_url = imageUrl;
+    }
+
+    console.log('📝 Prepared insert data:', JSON.stringify(insertData, null, 2));
+    console.log('🚀 Attempting INSERT...');
+
+    const { data, error } = await supabase
+      .from('special_deals')
+      .insert(insertData)
+      .select();
+    
+    console.log('📊 INSERT result:', { 
+      success: !error,
+      data,
+      error: error?.message,
+      errorCode: error?.code,
+      errorDetails: error?.details,
+      errorHint: error?.hint
+    });
+    
+    if (error) {
+      console.error('❌ INSERT ERROR FULL OBJECT:', JSON.stringify(error, null, 2));
+      throw error;
+    }
+
+    console.log('✅ Special deal created successfully!');
+    console.log('================================================');
+
+    revalidatePath('/admin/dashboard/products/special-deals');
+    return { success: true, error: null };
+  } catch (err) {
+    console.error('❌❌❌ CATCH BLOCK ERROR:', err);
+    console.error('Error type:', err?.constructor?.name);
+    console.error('Error message:', err instanceof Error ? err.message : String(err));
+    if (err && typeof err === 'object') {
+      console.error('Error object:', JSON.stringify(err, null, 2));
+    }
+    console.log('================================================');
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+  }
+}
+
+export async function updateSpecialDeal(
+  dealId: string,
+  name: string,
+  subtitle: string,
+  dealType: string,
+  iconName: string,
+  color: string,
+  imageUrl?: string
+) {
+  try {
+    await verifyAdmin();
+    const supabase = createAdminSupabaseClient();
+
+    const updateData: any = {
+      name,
+      subtitle,
+      deal_type: dealType,
+      icon_name: iconName,
+      color,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (imageUrl !== undefined) {
+      updateData.image_url = imageUrl;
+    }
+
+    const { error } = await supabase
+      .from('special_deals')
+      .update(updateData)
+      .eq('id', dealId);
+
+    if (error) throw error;
+
+    revalidatePath('/admin/dashboard/products/SpecialDeals');
+    return { success: true, error: null };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+  }
+}
+
+export async function toggleSpecialDealStatus(dealId: string, isActive: boolean) {
+  try {
+    await verifyAdmin();
+    const supabase = createAdminSupabaseClient();
+
+    const { error } = await supabase
+      .from('special_deals')
+      .update({ is_active: isActive, updated_at: new Date().toISOString() })
+      .eq('id', dealId);
+
+    if (error) throw error;
+
+    revalidatePath('/admin/dashboard/products/SpecialDeals');
+    return { success: true, error: null };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+  }
+}
+
+export async function updateSpecialDealOrder(dealId: string, newSortOrder: number) {
+  try {
+    await verifyAdmin();
+    const supabase = createAdminSupabaseClient();
+
+    const { error } = await supabase
+      .from('special_deals')
+      .update({ sort_order: newSortOrder, updated_at: new Date().toISOString() })
+      .eq('id', dealId);
+
+    if (error) throw error;
+
+    revalidatePath('/admin/dashboard/products/SpecialDeals');
+    return { success: true, error: null };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+  }
+}
+
+export async function deleteSpecialDeal(dealId: string) {
+  try {
+    await verifyAdmin();
+    const supabase = createAdminSupabaseClient();
+
+    const { error } = await supabase
+      .from('special_deals')
+      .delete()
+      .eq('id', dealId);
+
+    if (error) throw error;
+
+    revalidatePath('/admin/dashboard/products/SpecialDeals');
     return { success: true, error: null };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
