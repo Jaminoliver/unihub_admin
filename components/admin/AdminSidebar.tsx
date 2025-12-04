@@ -17,6 +17,7 @@ import {
   ClipboardList,
   ChevronDown,
   ChevronRight,
+  Bell,
 } from 'lucide-react';
 
 const navigation = [
@@ -50,6 +51,17 @@ const navigation = [
     ]
   },
   { name: 'Disputes', href: '/admin/dashboard/disputes', icon: AlertCircle, badge: true },
+  { 
+    name: 'Notifications',
+    icon: Bell,
+    children: [
+      { name: 'Overview', href: '/admin/dashboard/notifications' },
+      { name: 'Compose', href: '/admin/dashboard/notifications/compose' },
+      { name: 'Campaigns', href: '/admin/dashboard/notifications/campaigns' },
+      { name: 'Templates', href: '/admin/dashboard/notifications/templates' },
+      { name: 'Analytics', href: '/admin/dashboard/notifications/analytics' },
+    ]
+  },
   { 
     name: 'Financials', 
     icon: TrendingUp,
@@ -85,7 +97,7 @@ interface AdminSidebarProps {
 
 export function AdminSidebar({ session }: AdminSidebarProps) {
   const pathname = usePathname();
-  const [openSections, setOpenSections] = useState<string[]>(['Users', 'Products', 'Transactions', 'Financials', 'Settings']);
+  const [openSections, setOpenSections] = useState<string[]>(['Users', 'Products', 'Transactions', 'Notifications', 'Financials', 'Settings']);
 
   const toggleSection = (name: string) => {
     setOpenSections(prev =>
