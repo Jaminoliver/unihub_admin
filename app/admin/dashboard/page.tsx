@@ -2,8 +2,19 @@ import { createAdminSupabaseClient } from '@/lib/supabase/admin';
 import { EnhancedDashboardStats } from '@/components/admin/dashboard/EnhancedDashboardStats';
 import { EnhancedRecentActivity } from '@/components/admin/dashboard/EnhancedRecentActivity';
 import { DashboardCharts } from '@/components/admin/dashboard/DashboardCharts';
+import { requirePermission } from '@/lib/rbac/check-permission';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { AlertCircle } from 'lucide-react';
 
-export default async function AdminDashboardPage() {
+interface PageProps {
+  searchParams: Promise<{ error?: string }>;
+}
+
+export default async function AdminDashboardPage({ searchParams }: PageProps) {
+  // ✅ RBAC: Check view_dashboard permission
+  await requirePermission('view_dashboard');
+
+  const params = await searchParams;
   const supabase = createAdminSupabaseClient();
 
   const { data: orders } = await supabase
@@ -107,6 +118,16 @@ export default async function AdminDashboardPage() {
 
   return (
     <div className="space-y-6">
+      {params.error === 'unauthorized' && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Access Denied</AlertTitle>
+          <AlertDescription>
+            You do not have permission to access that page. Contact a super admin if you need access.
+          </AlertDescription>
+        </Alert>
+      )}
+      
       <EnhancedDashboardStats stats={stats} />
       <DashboardCharts />
       <EnhancedRecentActivity 

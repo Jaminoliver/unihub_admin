@@ -112,6 +112,7 @@ export async function createAdmin(fullName: string, email: string, password: str
   try {
     const supabase = createAdminSupabaseClient();
     
+    // Step 1: Create auth user
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email,
       password,
@@ -120,6 +121,7 @@ export async function createAdmin(fullName: string, email: string, password: str
 
     if (authError) throw authError;
 
+    // Step 2: Insert into admins table
     const { error: dbError } = await supabase
       .from('admins')
       .insert({
@@ -130,7 +132,11 @@ export async function createAdmin(fullName: string, email: string, password: str
         is_active: true,
       });
 
-    if (dbError) throw dbError;
+    // Step 3: ROLLBACK if admin insert fails - delete the auth user
+    if (dbError) {
+      await supabase.auth.admin.deleteUser(authData.user.id);
+      throw dbError;
+    }
 
     revalidatePath('/admin/dashboard/settings/admins');
     return { success: true };
@@ -158,11 +164,19 @@ export async function updateAdmin(id: string, fullName: string, role: string) {
 export async function deleteAdmin(id: string) {
   try {
     const supabase = createAdminSupabaseClient();
-    const { error } = await supabase
+    
+    // Delete from admins table
+    const { error: dbError } = await supabase
       .from('admins')
       .delete()
       .eq('id', id);
-    if (error) throw error;
+    
+    if (dbError) throw dbError;
+
+    // Also delete the auth user
+    const { error: authError } = await supabase.auth.admin.deleteUser(id);
+    if (authError) console.error('Failed to delete auth user:', authError);
+
     revalidatePath('/admin/dashboard/settings/admins');
     return { success: true };
   } catch (error: any) {

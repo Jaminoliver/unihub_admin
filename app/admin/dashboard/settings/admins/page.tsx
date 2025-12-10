@@ -2,8 +2,12 @@ import { Suspense } from 'react';
 import { Shield } from 'lucide-react';
 import { createAdminSupabaseClient } from '@/lib/supabase/admin';
 import { AdminUserManagement } from '@/components/admin/settings/AdminUserManagement';
+import { requirePermission } from '@/lib/rbac/check-permission';
 
 export default async function AdminUsersPage() {
+  // ✅ RBAC: Only super_admin can access
+  await requirePermission('manage_admins');
+
   const supabase = createAdminSupabaseClient();
 
   const { data: admins } = await supabase

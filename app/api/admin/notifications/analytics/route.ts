@@ -14,11 +14,11 @@ export async function GET(req: NextRequest) {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
-    // Overall stats
+    // Overall stats - FIXED: Use delivered_at instead of sent_at
     let analyticsQuery = supabase
       .from('notification_analytics')
       .select('*')
-      .gte('sent_at', startDate.toISOString());
+      .gte('delivered_at', startDate.toISOString());  // ✅ FIXED
 
     if (campaignId) {
       analyticsQuery = analyticsQuery.eq('campaign_id', campaignId);
@@ -39,20 +39,28 @@ export async function GET(req: NextRequest) {
 
     if (stats.totalSent > 0) {
       stats.deliveryRate = (stats.delivered / stats.totalSent) * 100;
+    }
+    
+    if (stats.delivered > 0) {
       stats.openRate = (stats.opened / stats.delivered) * 100;
+    }
+    
+    if (stats.opened > 0) {
       stats.clickRate = (stats.clicked / stats.opened) * 100;
     }
 
-    // Campaign stats
+    // Campaign stats - FIXED: Filter by created_at within date range
     const { data: campaigns } = await supabase
       .from('notification_campaigns')
       .select('*')
       .eq('status', 'sent')
-      .order('sent_at', { ascending: false })
+      .gte('created_at', startDate.toISOString())  // ✅ ADDED: Filter by date range
+      .order('created_at', { ascending: false })  // ✅ FIXED: Order by created_at
       .limit(10);
 
     return NextResponse.json({ stats, campaigns, analytics });
   } catch (error: any) {
+    console.error('Analytics API Error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

@@ -8,13 +8,37 @@ async function verifyAdmin() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Not authenticated');
 
+  // Check both admins table and profiles with admin role
   const { data: admin } = await supabase
     .from('admins')
-    .select('id, email')
+    .select('id, email, full_name, role')
     .eq('email', user.email)
     .maybeSingle();
 
-  if (!admin) throw new Error('Admin access required');
+  if (!admin) {
+    // Fallback: check if user is admin in profiles table
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('id, email, full_name, role')
+      .eq('id', user.id)
+      .single();
+
+    if (profile?.role === 'admin' || profile?.role === 'super_admin') {
+      return { 
+        supabase, 
+        admin: { 
+          id: profile.id, 
+          email: profile.email || user.email,
+          full_name: profile.full_name || 'Admin',
+          role: profile.role 
+        }, 
+        user 
+      };
+    }
+    
+    throw new Error('Admin access required');
+  }
+
   return { supabase, admin, user };
 }
 
@@ -23,29 +47,34 @@ export async function getAllDisputes(filters?: {
   status?: string;
   priority?: string;
   raisedBy?: string;
+  assignmentFilter?: 'all' | 'unassigned' | 'assigned' | 'my_disputes';
+  currentAdminId?: string;
 }) {
   try {
     const supabase = await createServerSupabaseClient();
 
     // --- PART 1: The Query for the Table (Filtered) ---
     let query = supabase
-      .from('disputes')
-      .select(`
-        *,
-        order:orders!disputes_order_id_fkey(
-          id, order_number, total_amount, payment_method, order_status,
-          buyer:profiles!orders_buyer_id_fkey(id, full_name, email, state, university:universities!profiles_university_id_fkey(name)),
-          seller:sellers!orders_seller_id_fkey(id, business_name, full_name, email, state, university:universities!sellers_university_id_fkey(name)),
-          product:products(id, name, image_urls)
-        ),
-        resolved_by:admins!disputes_resolved_by_admin_id_fkey(id, full_name, email)
-      `)
-      .order('created_at', { ascending: false });
+  .from('disputes')
+  .select(`
+    *,
+    dispute_number,
+    order:orders(
+      id, order_number, total_amount, payment_method, order_status,
+      buyer:profiles(id, full_name, email, state),
+      seller:sellers(id, business_name, full_name, email, state),
+      product:products(id, name, image_urls)
+    ),
+    resolved_by:admins!disputes_resolved_by_admin_id_fkey(id, full_name, email, role, admin_number),
+    assigned_to:profiles!disputes_assigned_to_admin_id_fkey(id, full_name, email)
+  `)
+  .order('created_at', { ascending: false });
 
     // Apply filters to the LIST query only
-    if (filters?.search) {
-      query = query.or(`description.ilike.%${filters.search}%,order.order_number.ilike.%${filters.search}%`);
-    }
+    // Apply filters to the LIST query only
+if (filters?.search) {
+  query = query.or(`description.ilike.%${filters.search}%,order.order_number.ilike.%${filters.search}%,dispute_number.ilike.%${filters.search}%`);
+}
     if (filters?.status && filters.status !== 'all') {
       query = query.eq('status', filters.status);
     }
@@ -56,39 +85,72 @@ export async function getAllDisputes(filters?: {
       query = query.eq('raised_by_type', filters.raisedBy);
     }
 
-    // --- PART 2: The Queries for the Stats Cards (Unfiltered by Tab) ---
-    // We run these in parallel using Promise.all for speed.
-    // We intentionally do NOT apply the 'status' filter here so the cards stay stable.
+    // Assignment filters
+    // Assignment filters
+if (filters?.assignmentFilter === 'unassigned') {
+  query = query.is('assigned_to_admin_id', null).neq('status', 'resolved').neq('status', 'closed');
+} else if (filters?.assignmentFilter === 'assigned') {
+  query = query.not('assigned_to_admin_id', 'is', null).neq('status', 'resolved').neq('status', 'closed');
+} else if (filters?.assignmentFilter === 'my_disputes' && filters?.currentAdminId) {
+  query = query.eq('assigned_to_admin_id', filters.currentAdminId).neq('status', 'resolved').neq('status', 'closed');
+}
 
+    // --- PART 2: The Queries for the Stats Cards (Unfiltered by Tab) ---
     const [
       listResult,
       totalResult,
       openResult,
       underReviewResult,
       resolvedResult,
-      highPriorityResult
+      highPriorityResult,
+      unassignedResult,
+      myDisputesResult
     ] = await Promise.all([
-      query, // The main list data
-      supabase.from('disputes').select('*', { count: 'exact', head: true }), // Total
-      supabase.from('disputes').select('*', { count: 'exact', head: true }).eq('status', 'open'), // Open
-      supabase.from('disputes').select('*', { count: 'exact', head: true }).eq('status', 'under_review'), // Under Review
-      supabase.from('disputes').select('*', { count: 'exact', head: true }).eq('status', 'resolved'), // Resolved
-      supabase.from('disputes').select('*', { count: 'exact', head: true }).eq('priority', 'high') // High Priority
+      query,
+      supabase.from('disputes').select('*', { count: 'exact', head: true }),
+      supabase.from('disputes').select('*', { count: 'exact', head: true }).eq('status', 'open'),
+      supabase.from('disputes').select('*', { count: 'exact', head: true }).eq('status', 'under_review'),
+      supabase.from('disputes').select('*', { count: 'exact', head: true }).eq('status', 'resolved'),
+      supabase.from('disputes').select('*', { count: 'exact', head: true }).eq('priority', 'high'),
+      supabase.from('disputes').select('*', { count: 'exact', head: true }).is('assigned_to_admin_id', null),
+      filters?.currentAdminId 
+        ? supabase.from('disputes').select('*', { count: 'exact', head: true }).eq('assigned_to_admin_id', filters.currentAdminId)
+        : Promise.resolve({ count: 0 })
     ]);
 
     if (listResult.error) {
-      console.error('❌ Disputes Query Error:', listResult.error);
-      throw listResult.error;
-    }
+  console.error('❌ Disputes Query Error:', listResult.error);
+  throw listResult.error;
+}
 
-    return {
-      disputes: listResult.data || [],
-      counts: {
+// Fetch admin info for assigned disputes
+const disputesWithAdminInfo = await Promise.all(
+  (listResult.data || []).map(async (dispute: any) => {
+    if (dispute.assigned_to_admin_id) {
+      const { data: adminData } = await supabase
+        .from('admins')
+        .select('id, full_name, email, role, admin_number')
+        .eq('id', dispute.assigned_to_admin_id)
+        .single();
+      
+      if (adminData) {
+        dispute.assigned_to = adminData;
+      }
+    }
+    return dispute;
+  })
+);
+
+return {
+  disputes: disputesWithAdminInfo,
+  counts: {
         total: totalResult.count || 0,
         open: openResult.count || 0,
         under_review: underReviewResult.count || 0,
         resolved: resolvedResult.count || 0,
-        high_priority: highPriorityResult.count || 0
+        high_priority: highPriorityResult.count || 0,
+        unassigned: unassignedResult.count || 0,
+        my_disputes: myDisputesResult.count || 0
       },
       error: null
     };
@@ -96,25 +158,16 @@ export async function getAllDisputes(filters?: {
     console.error('❌ Error fetching disputes:', err);
     return {
       disputes: [],
-      counts: { total: 0, open: 0, under_review: 0, resolved: 0, high_priority: 0 },
+      counts: { total: 0, open: 0, under_review: 0, resolved: 0, high_priority: 0, unassigned: 0, my_disputes: 0 },
       error: err instanceof Error ? err.message : 'Unknown error',
     };
   }
 }
-
 export async function getDisputeDetails(disputeId: string) {
-  console.log('\n========================================');
-  console.log('🔍 SERVER: getDisputeDetails called');
-  console.log('Dispute ID:', disputeId);
-  console.log('========================================\n');
-  
   try {
-    console.log('📌 Step 1: Creating admin Supabase client...');
     const { createAdminSupabaseClient } = await import('@/lib/supabase/admin');
     const supabase = createAdminSupabaseClient();
-    console.log('✅ Admin client created');
 
-    console.log('📌 Step 2: Executing database query...');
     const { data, error } = await supabase
       .from('disputes')
       .select(`
@@ -151,14 +204,14 @@ export async function getDisputeDetails(disputeId: string) {
             condition,
             brand
           ),
-         delivery_address:delivery_addresses(
-  id,
-  address_line,
-  city,
-  state,
-  landmark,
-  phone_number
-)
+          delivery_address:delivery_addresses(
+            id,
+            address_line,
+            city,
+            state,
+            landmark,
+            phone_number
+          )
         ),
         resolved_by:admins!disputes_resolved_by_admin_id_fkey(
           id,
@@ -169,44 +222,9 @@ export async function getDisputeDetails(disputeId: string) {
       .eq('id', disputeId)
       .single();
 
-    console.log('📌 Step 3: Query executed');
-    console.log('Has error?', !!error);
-    console.log('Has data?', !!data);
+    if (error) throw error;
+    if (!data) throw new Error('Dispute not found');
 
-    if (error) {
-      console.error('❌ Database error details:');
-      console.error('  Code:', error.code);
-      console.error('  Message:', error.message);
-      console.error('  Details:', error.details);
-      console.error('  Hint:', error.hint);
-      throw error;
-    }
-
-    if (!data) {
-      console.error('❌ No data returned for dispute:', disputeId);
-      throw new Error('Dispute not found');
-    }
-
-    console.log('✅ Raw data received:');
-    console.log('  Dispute ID:', data.id);
-    console.log('  Status:', data.status);
-    console.log('  Has order?', !!data.order);
-    console.log('  Order type:', Array.isArray(data.order) ? 'Array' : typeof data.order);
-    
-    if (data.order) {
-      const order = Array.isArray(data.order) ? data.order[0] : data.order;
-      console.log('  Order details:');
-      console.log('    - Order number:', order?.order_number);
-      console.log('    - Has buyer?', !!order?.buyer);
-      console.log('    - Buyer type:', Array.isArray(order?.buyer) ? 'Array' : typeof order?.buyer);
-      console.log('    - Has seller?', !!order?.seller);
-      console.log('    - Seller type:', Array.isArray(order?.seller) ? 'Array' : typeof order?.seller);
-      console.log('    - Has product?', !!order?.product);
-      console.log('    - Product type:', Array.isArray(order?.product) ? 'Array' : typeof order?.product);
-    }
-
-    console.log('📌 Step 4: Transforming data...');
-    // Transform arrays to single objects
     const transformedDispute = {
       ...data,
       order: Array.isArray(data.order) ? data.order[0] : data.order,
@@ -228,27 +246,9 @@ export async function getDisputeDetails(disputeId: string) {
         : transformedDispute.order.delivery_address;
     }
 
-    console.log('✅ Data transformed successfully');
-    console.log('📌 Step 5: Returning result...');
-    console.log('========================================');
-    console.log('✅ SUCCESS: Returning dispute data');
-    console.log('========================================\n');
-
     return { dispute: transformedDispute, error: null };
   } catch (err) {
-    console.error('\n========================================');
-    console.error('💥 ERROR in getDisputeDetails');
-    console.error('Error type:', typeof err);
-    console.error('Error instanceof Error:', err instanceof Error);
-    if (err instanceof Error) {
-      console.error('  Name:', err.name);
-      console.error('  Message:', err.message);
-      console.error('  Stack:', err.stack);
-    } else {
-      console.error('  Raw error:', err);
-    }
-    console.error('========================================\n');
-    
+    console.error('ERROR in getDisputeDetails:', err);
     return {
       dispute: null,
       error: err instanceof Error ? err.message : 'Unknown error',
@@ -261,7 +261,7 @@ export async function updateDisputeStatus(
   status: 'open' | 'under_review' | 'resolved' | 'closed'
 ) {
   try {
-    const { supabase, admin } = await verifyAdmin();
+    const { supabase } = await verifyAdmin();
 
     const { error } = await supabase
       .from('disputes')
@@ -288,7 +288,7 @@ export async function updateDisputePriority(
   priority: 'low' | 'medium' | 'high'
 ) {
   try {
-    const { supabase, admin } = await verifyAdmin();
+    const { supabase } = await verifyAdmin();
 
     const { error } = await supabase
       .from('disputes')
@@ -360,7 +360,7 @@ export async function resolveDispute(
 
     // Execute the action
     if (action === 'refund_buyer') {
-      // Call your existing refund function
+      // Call your existing refund function (Updated to handle wallet deduction)
       const { data: refundResult, error: refundError } = await supabase.functions.invoke('refund-escrow', {
         body: {
           orderId: orderData.id,
@@ -374,7 +374,7 @@ export async function resolveDispute(
         throw new Error(`Refund failed: ${refundError.message}`);
       }
 
-      // Notify buyer and seller
+      // Notifications (Edge function sends primary ones, these are admin audit/backups)
       await supabase.from('notifications').insert([
         {
           user_id: orderData.buyer_id,
@@ -391,6 +391,7 @@ export async function resolveDispute(
           is_read: false,
         },
       ]);
+
     } else if (action === 'release_to_seller') {
       // Release escrow to seller
       const { error: releaseError } = await supabase
@@ -404,20 +405,41 @@ export async function resolveDispute(
 
       if (releaseError) throw releaseError;
 
-      // Update seller wallet
+      // --- CRITICAL UPDATE: NEW LEDGER LOGIC ---
+      
       const { data: seller } = await supabase
         .from('sellers')
-        .select('wallet_balance')
+        .select('available_balance') // Fetch available_balance instead of wallet_balance
         .eq('id', orderData.seller_id)
         .single();
 
       if (seller) {
         const escrowAmount = parseFloat(orderData.escrow_amount || '0');
-        const newBalance = parseFloat(seller.wallet_balance || '0') + escrowAmount;
+        const currentBalance = parseFloat((seller.available_balance || 0).toString());
+        const newBalance = currentBalance + escrowAmount;
+
+        // 1. Update Balance
         await supabase
           .from('sellers')
-          .update({ wallet_balance: newBalance.toString() })
+          .update({ 
+            available_balance: newBalance,
+            updated_at: new Date().toISOString()
+          })
           .eq('id', orderData.seller_id);
+
+        // 2. Log Transaction (so it shows in history)
+        await supabase
+          .from('wallet_transactions')
+          .insert({
+            seller_id: orderData.seller_id,
+            transaction_type: 'credit',
+            amount: escrowAmount,
+            status: 'cleared', // Cleared immediately because Admin released it
+            description: `Dispute resolved: Funds released for order #${orderData.order_number}`,
+            reference: orderData.id,
+            balance_after: newBalance,
+            clears_at: new Date().toISOString() // Cleared now
+          });
       }
 
       // Notify both parties
@@ -437,6 +459,7 @@ export async function resolveDispute(
           is_read: false,
         },
       ]);
+
     } else if (action === 'cancelled') {
       // Cancel the order
       await supabase
@@ -511,6 +534,182 @@ export async function addAdminNotes(disputeId: string, notes: string) {
     if (error) throw error;
 
     revalidatePath('/admin/disputes');
+    return { success: true, error: null };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Unknown error',
+    };
+  }
+}
+export async function assignDisputeToMe(disputeId: string) {
+  try {
+    const { supabase, admin } = await verifyAdmin();
+
+    const now = new Date().toISOString();
+
+    // Update dispute
+    const { error: updateError } = await supabase
+      .from('disputes')
+      .update({
+        assigned_to_admin_id: admin.id,
+        assigned_at: now,
+      })
+      .eq('id', disputeId);
+
+    if (updateError) throw updateError;
+
+    // Create assignment record
+    await supabase
+      .from('dispute_assignments')
+      .insert({
+        dispute_id: disputeId,
+        admin_id: admin.id,
+        assigned_by_admin_id: admin.id,
+        assigned_at: now,
+      });
+
+    revalidatePath('/admin/dashboard/disputes');
+    return { success: true, error: null };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Unknown error',
+    };
+  }
+}
+
+export async function unassignDispute(disputeId: string) {
+  try {
+    const { supabase } = await verifyAdmin();
+
+    const now = new Date().toISOString();
+
+    // Update dispute
+    const { error: updateError } = await supabase
+      .from('disputes')
+      .update({
+        assigned_to_admin_id: null,
+        assigned_at: null,
+      })
+      .eq('id', disputeId);
+
+    if (updateError) throw updateError;
+
+    // Update assignment record
+    await supabase
+      .from('dispute_assignments')
+      .update({ unassigned_at: now })
+      .eq('dispute_id', disputeId)
+      .is('unassigned_at', null);
+
+    revalidatePath('/admin/dashboard/disputes');
+    return { success: true, error: null };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Unknown error',
+    };
+  }
+}
+
+export async function assignDisputeToAdmin(disputeId: string, adminId: string) {
+  try {
+    const { supabase, admin } = await verifyAdmin();
+
+    const now = new Date().toISOString();
+
+    // Update dispute
+    const { error: updateError } = await supabase
+      .from('disputes')
+      .update({
+        assigned_to_admin_id: adminId,
+        assigned_at: now,
+      })
+      .eq('id', disputeId);
+
+    if (updateError) throw updateError;
+
+    // Create assignment record
+    await supabase
+      .from('dispute_assignments')
+      .insert({
+        dispute_id: disputeId,
+        admin_id: adminId,
+        assigned_by_admin_id: admin.id,
+        assigned_at: now,
+      });
+
+    revalidatePath('/admin/dashboard/disputes');
+    return { success: true, error: null };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Unknown error',
+    };
+  }
+}
+
+export async function getAdminsList() {
+  try {
+    const { supabase } = await verifyAdmin();
+
+    const { data, error } = await supabase
+      .from('admins')
+      .select('id, full_name, email, role, admin_number')
+      .order('full_name');
+
+    if (error) throw error;
+
+    return { admins: data || [], error: null };
+  } catch (err) {
+    return {
+      admins: [],
+      error: err instanceof Error ? err.message : 'Unknown error',
+    };
+  }
+}
+export async function getDisputeInternalNotes(disputeId: string) {
+  try {
+    const { supabase } = await verifyAdmin();
+
+    const { data, error } = await supabase
+      .from('admin_dispute_notes')
+      .select(`
+        *,
+        admin:profiles!admin_dispute_notes_admin_id_fkey(id, full_name, email)
+      `)
+      .eq('dispute_id', disputeId)
+      .eq('is_internal', true)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    return { notes: data || [], error: null };
+  } catch (err) {
+    return {
+      notes: [],
+      error: err instanceof Error ? err.message : 'Unknown error',
+    };
+  }
+}
+
+export async function addDisputeInternalNote(disputeId: string, note: string) {
+  try {
+    const { supabase, admin } = await verifyAdmin();
+
+    const { error } = await supabase
+      .from('admin_dispute_notes')
+      .insert({
+        dispute_id: disputeId,
+        admin_id: admin.id,
+        note: note.trim(),
+        is_internal: true,
+      });
+
+    if (error) throw error;
+
+    revalidatePath('/admin/dashboard/disputes');
     return { success: true, error: null };
   } catch (err) {
     return {

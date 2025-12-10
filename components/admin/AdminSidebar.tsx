@@ -10,6 +10,7 @@ import {
   Package,
   ShoppingCart,
   AlertCircle,
+  Flag,
   Wallet,
   Settings,
   FileText,
@@ -19,6 +20,7 @@ import {
   ChevronRight,
   Bell,
 } from 'lucide-react';
+import { canAccessRoute, type AdminRole } from '@/lib/rbac/permissions';
 
 const navigation = [
   { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutDashboard },
@@ -51,6 +53,7 @@ const navigation = [
     ]
   },
   { name: 'Disputes', href: '/admin/dashboard/disputes', icon: AlertCircle, badge: true },
+  { name: 'Seller Disputes', href: '/admin/dashboard/seller-disputes', icon: Flag, badge: true },
   { 
     name: 'Notifications',
     icon: Bell,
@@ -80,7 +83,6 @@ const navigation = [
       { name: 'Locations', href: '/admin/dashboard/settings/locations' },
       { name: 'Commission Rules', href: '/admin/dashboard/settings/commission' },
       { name: 'Feature Flags', href: '/admin/dashboard/settings/features' },
-      { name: 'Notifications', href: '/admin/dashboard/settings/notifications' },
     ]
   },
   { name: 'Reports', href: '/admin/dashboard/reports', icon: FileText },
@@ -98,12 +100,43 @@ interface AdminSidebarProps {
 export function AdminSidebar({ session }: AdminSidebarProps) {
   const pathname = usePathname();
   const [openSections, setOpenSections] = useState<string[]>(['Users', 'Products', 'Transactions', 'Notifications', 'Financials', 'Settings']);
+  
+  const userRole = session.role as AdminRole;
 
   const toggleSection = (name: string) => {
     setOpenSections(prev =>
       prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name]
     );
   };
+
+  // Filter navigation based on role permissions
+  const filterNavigation = (items: typeof navigation) => {
+    return items.filter(item => {
+      if ('children' in item && item.children) {
+        // Filter children
+        const accessibleChildren = item.children.filter(child => 
+          canAccessRoute(userRole, child.href)
+        );
+        // Only show parent if at least one child is accessible
+        return accessibleChildren.length > 0;
+      }
+      // For items without children
+      return item.href ? canAccessRoute(userRole, item.href) : true;
+    }).map(item => {
+      if ('children' in item && item.children) {
+        // Return item with filtered children
+        return {
+          ...item,
+          children: item.children.filter(child => 
+            canAccessRoute(userRole, child.href)
+          )
+        };
+      }
+      return item;
+    });
+  };
+
+  const filteredNavigation = filterNavigation(navigation);
 
   return (
     <div className="w-64 bg-gray-900 text-white flex flex-col">
@@ -117,7 +150,7 @@ export function AdminSidebar({ session }: AdminSidebarProps) {
       </div>
 
       <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
-        {navigation.map((item) => {
+        {filteredNavigation.map((item) => {
           const Icon = item.icon;
           const hasChildren = 'children' in item && item.children;
           const isOpen = openSections.includes(item.name);
@@ -194,7 +227,7 @@ export function AdminSidebar({ session }: AdminSidebarProps) {
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate">{session?.full_name || 'Admin'}</p>
-            <p className="text-xs text-gray-400 truncate">{session?.role || 'admin'}</p>
+            <p className="text-xs text-gray-400 truncate capitalize">{session?.role?.replace('_', ' ') || 'admin'}</p>
           </div>
         </div>
       </div>

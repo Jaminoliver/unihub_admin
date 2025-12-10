@@ -1,25 +1,25 @@
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
-import { DisputesClient } from './DisputesClient';
+import { SellerDisputesClient } from '@/components/admin/seller-disputes/SellerDisputesClient';
 
-export default async function DisputesPage() {
+export default async function AdminSellerDisputesPage() {
   const supabase = await createServerSupabaseClient();
 
   const { data: { user }, error: userError } = await supabase.auth.getUser();
   if (userError || !user) {
-    redirect('/login');
+    redirect('/admin/login');
   }
 
-  // Get admin data
+  // Check if user is admin
   const { data: admin } = await supabase
     .from('admins')
-    .select('id, full_name, email')
-    .eq('email', user.email)
-    .maybeSingle();
+    .select('id, role')
+    .eq('id', user.id)
+    .single();
 
   if (!admin) {
-    return <div>Admin access required</div>;
+    redirect('/admin/login');
   }
 
-  return <DisputesClient adminId={admin.id} />;
+  return <SellerDisputesClient adminId={admin.id} />;
 }

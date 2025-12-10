@@ -1,11 +1,15 @@
 'use client';
 
 import { useState, useTransition, useEffect } from 'react';
-import { X, AlertTriangle, User, Store, Package, Calendar, FileText, Image as ImageIcon, CheckCircle, XCircle } from 'lucide-react';
-import { getDisputeDetails, updateDisputeStatus, updateDisputePriority, resolveDispute, addAdminNotes } from '@/app/admin/dashboard/disputes/actions';
+import { X, AlertTriangle, User, Store, Package, FileText, Image as ImageIcon, CheckCircle, MessageSquare, UserCheck } from 'lucide-react';import { getDisputeDetails, updateDisputeStatus, updateDisputePriority, resolveDispute, addAdminNotes } from '@/app/admin/dashboard/disputes/actions';
+import { OrderDisputeDetailsAdmin } from '@/components/admin/order-disputes/OrderDisputeDetailsAdmin';
+import { MessageCircle, Send } from 'lucide-react';
+
+import { getDisputeInternalNotes, addDisputeInternalNote } from '@/app/admin/dashboard/disputes/actions';
 
 type DisputeDetail = {
   id: string;
+  dispute_number?: string;
   order_id: string;
   raised_by_user_id: string;
   raised_by_type: 'buyer' | 'seller';
@@ -21,6 +25,8 @@ type DisputeDetail = {
   resolved_at: string | null;
   created_at: string;
   updated_at: string;
+  assigned_to_admin_id?: string | null;
+  assigned_at?: string | null;
   order?: {
     id: string;
     order_number: string;
@@ -36,7 +42,8 @@ type DisputeDetail = {
     product?: { id: string; name: string; image_urls: string[]; condition?: string; brand?: string };
     delivery_address?: { id: string; address_line: string; city: string; state: string; postal_code?: string };
   };
-  resolved_by?: { id: string; full_name: string; email: string } | null;
+  resolved_by?: { id: string; full_name: string; email: string; role?: string; admin_number?: string } | null;
+  assigned_to?: { id: string; full_name: string; email: string; role?: string; admin_number?: string } | null;
 };
 
 interface DisputeDetailModalProps {
@@ -49,98 +56,41 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
   const [dispute, setDispute] = useState<DisputeDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [showResolveModal, setShowResolveModal] = useState(false);
+  const [showChatModal, setShowChatModal] = useState(false);
   const [resolution, setResolution] = useState('');
   const [adminNotesText, setAdminNotesText] = useState('');
   const [selectedAction, setSelectedAction] = useState<'refund_buyer' | 'release_to_seller' | 'cancelled' | 'no_action'>('no_action');
+  const [internalNotes, setInternalNotes] = useState<any[]>([]);
+  const [newInternalNote, setNewInternalNote] = useState('');
+  const [sendingNote, setSendingNote] = useState(false);
+  const [showInternalNotes, setShowInternalNotes] = useState(false);
 
   useEffect(() => {
-    loadDispute();
-  }, [disputeId]);
+  loadDispute();
+  loadInternalNotes();
+}, [disputeId]);
 
   const loadDispute = async () => {
-    console.log('========================================');
-    console.log('🚀 STARTING LOAD DISPUTE');
-    console.log('Dispute ID:', disputeId);
-    console.log('Dispute ID type:', typeof disputeId);
-    console.log('Dispute ID length:', disputeId?.length);
-    console.log('========================================');
-    
     setLoading(true);
     try {
-      console.log('⏳ Step 1: Calling getDisputeDetails...');
       const result = await getDisputeDetails(disputeId);
-      
-      console.log('📦 Step 2: Result received');
-      console.log('Full result object:', JSON.stringify(result, null, 2));
-      console.log('Result type:', typeof result);
-      console.log('Result keys:', result ? Object.keys(result) : 'null');
-      
       const { dispute: data, error } = result;
       
-      console.log('📦 Step 3: Destructured values:');
-      console.log('  - data exists:', !!data);
-      console.log('  - data type:', typeof data);
-      console.log('  - error exists:', !!error);
-      console.log('  - error type:', typeof error);
-      console.log('  - error value:', error);
-      
       if (error) {
-        console.error('❌ Step 4: Error detected:', error);
         alert(`Error loading dispute: ${error}`);
-        return; // Exit early if there's an error
+        return;
       }
       
       if (data) {
-        console.log('✅ Step 5: Dispute data found');
-        console.log('Dispute keys:', Object.keys(data));
-        console.log('Dispute ID:', data.id);
-        console.log('Status:', data.status);
-        console.log('Has order?', !!data.order);
-        
-        if (data.order) {
-          console.log('Order keys:', Object.keys(data.order));
-          console.log('Order number:', data.order.order_number);
-          console.log('Has buyer?', !!data.order.buyer);
-          console.log('Has seller?', !!data.order.seller);
-          console.log('Has product?', !!data.order.product);
-        }
-        
-        console.log('📝 Step 6: Setting dispute state...');
         setDispute(data as DisputeDetail);
         setAdminNotesText(data.admin_notes || '');
-        console.log('✅ Step 7: State set successfully');
       } else {
-        console.error('⚠️ Step 5: No dispute data (but also no error)');
-        console.error('This should not happen! Result was:', result);
-        alert('No dispute data found (but no error returned)');
+        alert('No dispute data found');
       }
     } catch (err) {
-      console.error('💥 EXCEPTION CAUGHT in loadDispute');
-      console.error('Exception type:', typeof err);
-      console.error('Exception value:', err);
-      console.error('Is Error instance?', err instanceof Error);
-      console.error('String representation:', String(err));
-      console.error('JSON attempt:', (() => {
-        try {
-          return JSON.stringify(err, null, 2);
-        } catch {
-          return 'Cannot stringify';
-        }
-      })());
-      
-      if (err instanceof Error) {
-        console.error('Error name:', err.name);
-        console.error('Error message:', err.message);
-        console.error('Error stack:', err.stack);
-      }
-      
       alert(`Exception: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      console.log('🏁 Step 8: Setting loading to false');
       setLoading(false);
-      console.log('========================================');
-      console.log('✅ LOAD DISPUTE COMPLETE');
-      console.log('========================================');
     }
   };
 
@@ -149,6 +99,17 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
     if (isNaN(numericPrice)) return '₦0.00';
     return new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(numericPrice);
   };
+
+  const loadInternalNotes = async () => {
+  try {
+    const result = await getDisputeInternalNotes(disputeId);
+    if (result.notes) {
+      setInternalNotes(result.notes);
+    }
+  } catch (error) {
+    console.error('Error loading internal notes:', error);
+  }
+};
 
   const getFirstImage = (imageUrls: string[] | string | null) => {
     if (!imageUrls) return null;
@@ -159,6 +120,25 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
       return null;
     }
   };
+
+  const handleSendInternalNote = async () => {
+  if (!newInternalNote.trim()) return;
+  
+  setSendingNote(true);
+  try {
+    const result = await addDisputeInternalNote(disputeId, newInternalNote);
+    if (result.success) {
+      setNewInternalNote('');
+      await loadInternalNotes();
+    } else {
+      alert(`Failed to send note: ${result.error}`);
+    }
+  } catch (error: any) {
+    alert(`Error: ${error.message}`);
+  } finally {
+    setSendingNote(false);
+  }
+};
 
   const getReasonLabel = (reason: string) => {
     const labels: Record<string, string> = {
@@ -265,7 +245,6 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
     <>
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
         <div className="bg-white rounded-2xl max-w-6xl w-full my-8">
-          {/* Header */}
           <div className="sticky top-0 bg-gradient-to-r from-orange-500 to-red-600 text-white p-6 rounded-t-2xl flex items-center justify-between z-10">
             <div>
               <h3 className="text-2xl font-bold">Dispute Resolution</h3>
@@ -277,7 +256,6 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
           </div>
 
           <div className="p-6 space-y-6 max-h-[calc(90vh-100px)] overflow-y-auto">
-            {/* Status Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
                 <p className="text-xs text-orange-600 font-semibold uppercase mb-1">Status</p>
@@ -305,6 +283,7 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
                   <option value="low">Low</option>
                   <option value="medium">Medium</option>
                   <option value="high">High</option>
+                  <option value="high">High</option>
                 </select>
               </div>
 
@@ -321,7 +300,6 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
               </div>
             </div>
 
-            {/* Product & Order Info */}
             <div className="bg-gray-50 rounded-xl p-6 border">
               <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
                 <Package className="h-5 w-5" />
@@ -354,7 +332,6 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
               </div>
             </div>
 
-            {/* Parties Involved */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-blue-50 rounded-xl p-4 border border-blue-200">
                 <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
@@ -387,7 +364,6 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
               </div>
             </div>
 
-            {/* Dispute Details */}
             <div className="bg-red-50 rounded-xl p-6 border border-red-200">
               <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <AlertTriangle className="h-5 w-5 text-red-600" />
@@ -408,7 +384,6 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
                 </div>
               </div>
 
-              {/* Evidence Images */}
               {dispute.evidence_urls && dispute.evidence_urls.length > 0 && (
                 <div className="mt-4">
                   <p className="text-xs text-gray-600 font-semibold uppercase mb-2 flex items-center gap-1">
@@ -434,8 +409,50 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
                 </div>
               )}
             </div>
-
-            {/* Admin Notes */}
+            {/* Assigned Admin Info */}
+            {dispute.assigned_to_admin_id && dispute.assigned_to && (
+              <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-6 border-2 border-green-200">
+                <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <UserCheck className="h-5 w-5 text-green-600" />
+                  Assigned Administrator
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs text-gray-600 font-semibold uppercase mb-1">Admin Name</p>
+                    <p className="text-sm font-medium text-gray-900">{dispute.assigned_to.full_name}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-600 font-semibold uppercase mb-1">Admin ID</p>
+                    <p className="text-sm font-mono font-semibold text-green-700">{dispute.assigned_to.admin_number || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-600 font-semibold uppercase mb-1">Role</p>
+                    <span className={`inline-flex text-xs px-2 py-1 rounded-full font-semibold ${
+                      dispute.assigned_to.role === 'super_admin' ? 'bg-purple-100 text-purple-700' :
+                      dispute.assigned_to.role === 'financial_admin' ? 'bg-green-100 text-green-700' :
+                      dispute.assigned_to.role === 'support' ? 'bg-blue-100 text-blue-700' :
+                      dispute.assigned_to.role === 'moderator' ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-gray-100 text-gray-700'
+                    }`}>
+                      {dispute.assigned_to.role === 'super_admin' ? 'Super Admin' :
+                       dispute.assigned_to.role === 'financial_admin' ? 'Financial Admin' :
+                       dispute.assigned_to.role === 'support' ? 'Support' :
+                       dispute.assigned_to.role === 'moderator' ? 'Moderator' : 'Admin'}
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-600 font-semibold uppercase mb-1">Email</p>
+                    <p className="text-sm text-gray-600">{dispute.assigned_to.email}</p>
+                  </div>
+                  {dispute.assigned_at && (
+                    <div className="md:col-span-2">
+                      <p className="text-xs text-gray-600 font-semibold uppercase mb-1">Assigned On</p>
+                      <p className="text-sm text-gray-600">{formatDate(dispute.assigned_at)}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             <div className="bg-yellow-50 rounded-xl p-6 border border-yellow-200">
               <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <FileText className="h-5 w-5 text-yellow-600" />
@@ -457,7 +474,82 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
               </button>
             </div>
 
-            {/* Resolution (if resolved) */}
+            {/* Internal Notes Section */}
+            <div className="bg-blue-50 rounded-xl p-6 border border-blue-200">
+              <button
+                onClick={() => setShowInternalNotes(!showInternalNotes)}
+                className="w-full flex items-center justify-between"
+              >
+                <div className="flex items-center gap-2">
+                  <MessageCircle className="h-5 w-5 text-blue-600" />
+                  <h4 className="font-semibold text-gray-900">Internal Admin Notes</h4>
+                  <span className="text-xs bg-blue-200 text-blue-800 px-2 py-0.5 rounded-full">
+                    {internalNotes.length}
+                  </span>
+                </div>
+                <span className="text-sm text-blue-600">
+                  {showInternalNotes ? 'Hide' : 'Show'}
+                </span>
+              </button>
+
+              {showInternalNotes && (
+                <div className="mt-4 space-y-3">
+                  <p className="text-xs text-blue-700 mb-3">
+                    💡 These notes are only visible to admins and are used for internal coordination.
+                  </p>
+
+                  <div className="max-h-64 overflow-y-auto space-y-2 mb-3">
+                    {internalNotes.length === 0 ? (
+                      <p className="text-sm text-gray-500 italic text-center py-4">
+                        No internal notes yet
+                      </p>
+                    ) : (
+                      internalNotes.map((note: any) => (
+                        <div key={note.id} className="bg-white rounded-lg p-3 border border-blue-200">
+                          <div className="flex items-start justify-between mb-1">
+                            <p className="text-xs font-semibold text-blue-900">
+                              {note.admin?.full_name || 'Admin'}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              {new Date(note.created_at).toLocaleString('en-US', {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </p>
+                          </div>
+                          <p className="text-sm text-gray-700 whitespace-pre-wrap">{note.note}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="flex gap-2">
+                    <textarea
+                      value={newInternalNote}
+                      onChange={(e) => setNewInternalNote(e.target.value)}
+                      placeholder="Add internal note for other admins..."
+                      className="flex-1 px-3 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm resize-none"
+                      rows={2}
+                      disabled={sendingNote}
+                    />
+                    <button
+                      onClick={handleSendInternalNote}
+                      disabled={!newInternalNote.trim() || sendingNote}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {sendingNote ? (
+                        <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+                      ) : (
+                        <Send className="h-5 w-5" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {dispute.status === 'resolved' && dispute.resolution && (
               <div className="bg-green-50 rounded-xl p-6 border border-green-200">
                 <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
@@ -481,9 +573,15 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
               </div>
             )}
 
-            {/* Action Buttons */}
             {canResolve && (
               <div className="flex gap-3 pt-4 border-t">
+                <button
+                  onClick={() => setShowChatModal(true)}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:from-blue-600 hover:to-indigo-700 transition font-semibold flex items-center justify-center gap-2"
+                >
+                  <MessageSquare className="h-5 w-5" />
+                  Open Chat
+                </button>
                 <button
                   onClick={() => setShowResolveModal(true)}
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 transition font-semibold"
@@ -494,9 +592,9 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
             )}
           </div>
         </div>
-      </div>
+      </div>      
 
-      {/* Resolve Modal */}
+      
       {showResolveModal && (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-xl max-w-2xl w-full p-6">
@@ -545,6 +643,43 @@ export function DisputeDetailModal({ disputeId, onClose }: DisputeDetailModalPro
             </div>
           </div>
         </div>
+      )}
+
+      {showChatModal && dispute && dispute.order && (
+        <OrderDisputeDetailsAdmin
+          dispute={{
+            id: dispute.id,
+            order_id: dispute.order_id,
+            dispute_reason: dispute.dispute_reason,
+            description: dispute.description,
+            status: dispute.status,
+            priority: dispute.priority,
+            resolution: dispute.resolution,
+            created_at: dispute.created_at,
+            order: {
+              order_number: dispute.order.order_number,
+              total_amount: parseFloat(dispute.order.total_amount || '0'),
+              product: {
+                name: dispute.order.product?.name || 'Unknown Product',
+                image_urls: dispute.order.product?.image_urls || []
+              },
+              buyer: {
+                full_name: dispute.order.buyer?.full_name || 'Unknown Buyer',
+                email: dispute.order.buyer?.email || ''
+              },
+              seller: {
+                business_name: dispute.order.seller?.business_name || '',
+                full_name: dispute.order.seller?.full_name || 'Unknown Seller',
+                email: dispute.order.seller?.email || ''
+              }
+            }
+          }}
+          onClose={() => {
+            setShowChatModal(false);
+            loadDispute();
+          }}
+          onUpdate={loadDispute}
+        />
       )}
     </>
   );
